@@ -132,6 +132,13 @@ _How ambiguous points in the assignment were interpreted._
 
 _What the detector and the infrastructure do not cover._
 
+- One NAT gateway, in the first Availability Zone (eu-north-1a), serves both app subnets, to save the cost of a second one.
+  If that zone fails, the instance in the other zone keeps answering requests but loses outbound access
+  (image pulls from ECR, CloudWatch Logs, Secrets Manager) until the zone recovers.
+- RDS and Valkey each run in a single Availability Zone, also for cost.
+  If their zone fails, the database or the cache is unavailable until AWS recovers it;
+  the two app instances in different zones are the highly available part of the design.
+
 - The Valkey cache has no AUTH token. Only the app security group can reach it, every connection uses TLS,
   entries expire after 1 hour, and cached results hold no email addresses or subjects.
   The Valkey slow log (CloudWatch Logs, 7 days) can contain truncated command arguments, such as a cache key (an email's SHA-256).
@@ -144,6 +151,10 @@ _Source and license of every data set used for testing and evaluation._
 
 _What would come next with more time._
 
+- A NAT gateway in each Availability Zone, each app subnet routed to the one in its own zone
+  (about $1.22 per day per extra NAT gateway with its public IPv4 address).
+- Multi-AZ RDS (a standby in the second zone; db.t4g.micro goes from $0.016 to $0.033 per hour)
+  and a Valkey replica in the second zone with automatic failover (one more cache.t4g.micro node, $0.016 per hour).
 - A customer-managed KMS key for ECR, CloudWatch Logs, Secrets Manager, ElastiCache and the alarm topic (about $1 per month);
   it would close the KMS-related scanner findings listed under Security.
 - A custom domain: an ACM certificate on CloudFront (TLS 1.2+ minimum) and HTTPS between CloudFront and the ALB,
