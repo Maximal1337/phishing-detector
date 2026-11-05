@@ -9,6 +9,55 @@ two EC2 instances behind an Application Load Balancer, with scan history in Amaz
 
 _Input formats, the indicator families, how the risk score and verdict are computed, example output._
 
+The detector (`phishing_detector/`, Python standard library only) reads one email and reports whether it is likely phishing and why.
+It is rule-based: every point of the score comes from a named indicator with its evidence, and each rule has its own tests.
+
+**Input.** A raw email with headers (`.eml`, or a text file in that format), or just the body text.
+For body-only input the authentication, sender and history checks are skipped, and the result says so.
+
+**Indicators** (weights in [`scoring.py`](phishing_detector/scoring.py), one table):
+
+| Family | What is checked |
+|---|---|
+| Authentication | SPF, DKIM and DMARC results from the topmost `Authentication-Results` header only; the lower ones can be written by the sender. A missing header is neutral. |
+| Sender | Display name that shows another domain's address or names a brand the mail doesn't come from; sender domain that imitates a protected brand (homoglyphs such as `examp1ebank`, `exarnplebank` or Cyrillic letters, small edit distance, brand plus extra words); punycode; Reply-To or Return-Path at another domain. |
+| Links | Bare IP hosts; link text that shows another domain than the link; lookalike domains; a brand in front of an unrelated domain (`examplebank.test.login.example.net`); punycode; `user@host` tricks; `javascript:`/`data:` URLs; password fields in the email; often-abused TLDs; URL shorteners; unusual ports. |
+| Wording | Urgency, threats, credential requests, payment pressure, prize bait and generic greetings, each counted once. |
+| Attachments | From MIME metadata only: programs and scripts, macro-enabled Office files, HTML/SVG files, archives and disk images, double extensions and the right-to-left override trick, a harmless declared type on a risky file, an archive password in the text. |
+| History | Earlier phishing verdicts for the same sender domain (web app only, see below). |
+
+**Score and verdict.** The score is the sum of the indicator weights, capped at 100:
+`phishing` from 50, `suspicious` from 25, `likely_legitimate` below 25.
+
+**Safety.** Emails are treated as hostile data: links are parsed as text and never fetched or resolved,
+HTML is never rendered, and attachment payloads are never decoded (a test asserts it).
+Evidence shows domains, defanged URLs (`hxxp://evil[.]example/login`), matched phrases and attachment names,
+never full email addresses or the subject.
+
+**History without poisoning.** An earlier phishing verdict counts against a sender domain only if that email
+passed DMARC for the domain or the domain was itself a lookalike. Otherwise anyone could put a bank's address
+in the From line of a phishing mail and make the bank's real mail look suspicious afterwards.
+
+Example:
+
+```text
+$ python -m phishing_detector scan samples/phishing_spoofed_bank.eml
+Verdict: PHISHING (score 100/100)
+Input: email with headers
+Indicators (9):
+  [+30] links.ip_host: A link points to a bare IP address instead of a domain name (hxxp://203[.]0[.]113[.]45:8080/examplebank/verify)
+  [+25] auth.dmarc_fail: DMARC failed: the From domain is probably spoofed (dmarc=fail)
+  [+15] auth.spf_fail: SPF failed: the sending server isn't allowed to send for that domain (spf=fail)
+  [+15] sender.reply_to_mismatch: Replies would go to a different domain than the sender's (replies go to example[.]net)
+  [+15] wording.credentials: Asks to verify an account or to enter a password ("confirm ... identity")
+  [+10] links.nonstandard_port: A link uses an unusual port number (hxxp://203[.]0[.]113[.]45:8080/examplebank/verify)
+  [+10] wording.threat: Threats of suspension, closure or other trouble ("card ... locked"; "unauthorized activity")
+  [+5] sender.return_path_mismatch: The bounce address (Return-Path) is at another domain (common for mailing services too) (bounces go to example[.]net)
+  [+5] wording.generic_greeting: Generic greeting instead of the recipient's name ("dear customer")
+Notes:
+  - History check skipped: no scan history was provided.
+```
+
 ## Architecture
 
 _Diagram and request flow: CloudFront, ALB, Auto Scaling group of two EC2 instances, RDS PostgreSQL, ElastiCache, logging and monitoring._
@@ -29,6 +78,21 @@ _What lives where._
 ## Run locally
 
 _Command-line scan without Docker; the web app with docker compose; running the tests._
+
+### Command line (Python 3.13, no dependencies)
+
+```bash
+python -m phishing_detector scan samples/phishing_lookalike_sender.eml
+python -m phishing_detector scan samples/plain_phishing.txt --json
+```
+
+### Tests
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt      # Windows: .venv\Scripts\pip
+.venv/bin/python -m pytest -q
+```
 
 ## Deploy to AWS
 
@@ -132,6 +196,14 @@ _How ambiguous points in the assignment were interpreted._
 
 _What the detector and the infrastructure do not cover._
 
+- The detector is rule-based: a well-written phishing email with no technical tells (clean domain, no links or attachments,
+  neutral wording) scores low. The weights are set by hand, not learned.
+- Without the full Public Suffix List, the registrable domain is "the last two labels", plus a short list of
+  two-label suffixes such as `co.uk` and `co.il`.
+- Lookalike detection only protects the brands listed in `phishing_detector/data/brands.txt`; the TLD and shortener lists are hand-picked.
+- Links are judged from their text only (never fetched or resolved), so a clean-looking URL that redirects somewhere bad is not caught.
+- `Authentication-Results` is trusted as written by the receiving server; the detector can't tell which server that was.
+
 - One NAT gateway, in the first Availability Zone (eu-north-1a), serves both app subnets, to save the cost of a second one.
   If that zone fails, the instance in the other zone keeps answering requests but loses outbound access
   (image pulls from ECR, CloudWatch Logs, Secrets Manager) until the zone recovers.
@@ -146,6 +218,11 @@ _What the detector and the infrastructure do not cover._
 ## Data sets
 
 _Source and license of every data set used for testing and evaluation._
+
+- `samples/`: twelve synthetic emails written for this project, using reserved names only
+  ([RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) domains such as `example.com` and `.test`,
+  [RFC 5737](https://www.rfc-editor.org/rfc/rfc5737) documentation addresses) and placeholder attachment bytes.
+  `tests/test_samples.py` pins the expected verdict of each.
 
 ## Next steps
 
