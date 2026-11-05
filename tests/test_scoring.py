@@ -1,6 +1,6 @@
 import pytest
 
-from phishing_detector.checks import auth, links, sender, wording
+from phishing_detector.checks import attachments, auth, links, sender, wording
 from phishing_detector.models import Finding
 from phishing_detector.scoring import WEIGHTS, analyze, score_of, to_indicators, verdict_for
 
@@ -34,7 +34,7 @@ def test_unknown_signal_is_an_error():
         to_indicators([Finding("no.such_signal", "r")])
 
 
-FAMILIES = [auth, sender, links, wording]
+FAMILIES = [auth, sender, links, wording, attachments]
 
 
 def test_every_signal_a_check_can_emit_has_a_weight():

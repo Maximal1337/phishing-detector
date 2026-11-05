@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .checks import auth, links, sender, wording
+from .checks import attachments, auth, links, sender, wording
 from .models import Finding, Indicator, ParsedEmail, Result
 from .parser import parse
 
@@ -67,7 +67,7 @@ Check = Callable[[ParsedEmail, list[str]], list[Finding]]
 
 # Checks that need the message headers, and checks that work on any input.
 EMAIL_CHECKS: list[Check] = [auth.check, sender.check]
-CONTENT_CHECKS: list[Check] = [links.check, wording.check]
+CONTENT_CHECKS: list[Check] = [links.check, wording.check, attachments.check]
 
 
 def verdict_for(score: int) -> str:
