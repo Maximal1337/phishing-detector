@@ -1,0 +1,17 @@
+Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=news.example.net; dkim=pass header.d=news.example.net; dmarc=pass header.from=news.example.net
+Received: from news.example.net (news.example.net [203.0.113.150]) by mx.example.org; Thu, 05 Nov 2026 13:05:00 +0000
+From: Example Bank <notice@news.example.net>
+To: customer@example.com
+Subject: Your November statement is ready to view
+Date: Thu, 05 Nov 2026 13:04:33 +0000
+Message-ID: <20261105130433.6006@news.example.net>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Hello,</p>
+<p>your November statement is ready.</p>
+<!-- the link host is "exаmplebank.test" written with a Cyrillic "а", in punycode -->
+<p><a href="http://xn--exmplebank-0qi.test/statement">View statement</a></p>
+<p>Example Bank</p>
+</body></html>

@@ -1,0 +1,6 @@
+Hi all,
+
+the build is green again; the release notes are on https://docs.example.com/releases/4.2.
+
+Thanks,
+Dana

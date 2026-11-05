@@ -1,0 +1,16 @@
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=examplebank.test; dkim=pass header.d=examplebank.test; dmarc=pass header.from=examplebank.test
+Received: from mail.examplebank.test (mail.examplebank.test [203.0.113.30]) by mx.example.com; Thu, 05 Nov 2026 15:45:00 +0000
+From: ExampleBank <receipts@examplebank.test>
+To: customer@example.com
+Subject: Receipt for your transfer on 5 November
+Date: Thu, 05 Nov 2026 15:44:10 +0000
+Message-ID: <20261105154410.9009@examplebank.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello Dana,
+
+thank you for your payment of 42.00 EUR to Example Utilities on 5 November.
+You can see the details in your account at https://examplebank.test/account.
+
+ExampleBank

@@ -1,0 +1,6 @@
+Dear customer,
+
+Your account will be suspended within 24 hours because of suspicious activity.
+Verify your password at http://198.51.100.23/secure/login to keep access.
+
+Security Team

@@ -1,0 +1,28 @@
+Authentication-Results: mx.example.org; spf=softfail smtp.mailfrom=billing.example.net; dkim=none; dmarc=none
+Received: from billing.example.net (billing.example.net [198.51.100.61]) by mx.example.org; Thu, 05 Nov 2026 10:02:00 +0000
+From: Accounts Receivable <accounts@billing.example.net>
+To: finance@example.com
+Subject: Invoice 4471 for October services
+Date: Thu, 05 Nov 2026 10:01:44 +0000
+Message-ID: <20261105100144.3003@billing.example.net>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="sample-3"
+
+--sample-3
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+please see the attached invoice. The outstanding balance must be paid
+by Friday to avoid a late fee.
+
+Accounts Receivable
+
+--sample-3
+Content-Type: application/pdf; name="invoice_4471.pdf.exe"
+Content-Disposition: attachment; filename="invoice_4471.pdf.exe"
+Content-Transfer-Encoding: base64
+
+cGxhY2Vob2xkZXIgLSBub3QgYSByZWFsIGZpbGU=
+
+--sample-3--

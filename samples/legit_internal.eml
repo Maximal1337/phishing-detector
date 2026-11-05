@@ -1,0 +1,28 @@
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass header.from=example.com
+Received: from laptop.example.com (laptop.example.com [192.0.2.15]) by mx.example.com; Thu, 05 Nov 2026 16:30:00 +0000
+From: Dana Levi <dana@example.com>
+To: team@example.com
+Subject: Notes from the Q3 review meeting
+Date: Thu, 05 Nov 2026 16:29:02 +0000
+Message-ID: <20261105162902.1010@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="sample-10"
+
+--sample-10
+Content-Type: text/plain; charset=utf-8
+
+Hi all,
+
+thanks for today. The report we went through is attached, and the
+action items are on the wiki: https://wiki.example.com/q3-review
+
+Dana
+
+--sample-10
+Content-Type: application/pdf; name="Q3_report.pdf"
+Content-Disposition: attachment; filename="Q3_report.pdf"
+Content-Transfer-Encoding: base64
+
+cGxhY2Vob2xkZXIgLSBub3QgYSByZWFsIGZpbGU=
+
+--sample-10--

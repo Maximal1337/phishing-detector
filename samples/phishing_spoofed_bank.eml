@@ -1,0 +1,19 @@
+Authentication-Results: mx.example.org; spf=fail smtp.mailfrom=bulk.example.net; dkim=none; dmarc=fail header.from=examplebank.test
+Received: from bulk.example.net (bulk.example.net [203.0.113.80]) by mx.example.org; Thu, 05 Nov 2026 09:30:00 +0000
+Return-Path: <bounce@bulk.example.net>
+From: Example Bank <support@examplebank.test>
+Reply-To: Card Services <claims@reply.example.net>
+To: customer@example.com
+Subject: Important notice about your card ending 4417
+Date: Thu, 05 Nov 2026 09:29:51 +0000
+Message-ID: <20261105092951.2002@bulk.example.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Dear customer,
+
+your card has been locked because of unauthorized activity.
+Confirm your identity here to restore access:
+http://203.0.113.45:8080/examplebank/verify
+
+Example Bank Card Services

