@@ -1,0 +1,26 @@
+# Top-level domains that public abuse reports (for example Spamhaus' most-abused
+# TLDs and Interisle's phishing studies) often rank high. Hand-picked and not
+# authoritative: a weak signal, tuned on the evaluation data.
+zip
+mov
+top
+xyz
+click
+link
+work
+gq
+ml
+cf
+tk
+ga
+buzz
+rest
+fit
+cam
+icu
+cyou
+monster
+quest
+sbs
+cfd
+bond

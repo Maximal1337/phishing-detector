@@ -1,0 +1,22 @@
+# Public URL-shortener domains: a short link hides where it really goes.
+bit.ly
+bit.do
+tinyurl.com
+t.co
+goo.gl
+ow.ly
+is.gd
+v.gd
+buff.ly
+rebrand.ly
+cutt.ly
+shorturl.at
+rb.gy
+t.ly
+tiny.cc
+bl.ink
+s.id
+lnkd.in
+qrco.de
+shorte.st
+adf.ly
