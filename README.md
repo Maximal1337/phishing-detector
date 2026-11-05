@@ -45,6 +45,10 @@ _What each resource costs per day and the total for the test period._
 
 _IAM, network exposure, encryption, secrets handling, untrusted email handling, and the justification for every wildcard permission and every skipped scanner check._
 
+- Dependencies are pinned to exact versions, and each pinned version had been public for at least 7 days when it was pinned,
+  so a broken or compromised release has time to be noticed and yanked before it reaches the image.
+  Transitive dependencies other than botocore are not pinned and resolve at install time.
+
 ## Assumptions
 
 _How ambiguous points in the assignment were interpreted._
