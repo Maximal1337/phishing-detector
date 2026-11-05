@@ -2,5 +2,6 @@
 
 from .models import Indicator, Result
 from .parser import parse
+from .scoring import analyze
 
-__all__ = ["Indicator", "Result", "parse"]
+__all__ = ["Indicator", "Result", "analyze", "parse"]
