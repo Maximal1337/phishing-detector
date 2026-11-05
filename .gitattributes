@@ -1,0 +1,3 @@
+# Check out every text file with LF line endings, also on Windows, so shell
+# scripts and Terraform templates (EC2 user data) run unchanged on Linux.
+* text=auto eol=lf
