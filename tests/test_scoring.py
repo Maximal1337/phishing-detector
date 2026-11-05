@@ -1,6 +1,6 @@
 import pytest
 
-from phishing_detector.checks import attachments, auth, links, sender, wording
+from phishing_detector.checks import attachments, auth, history, links, sender, wording
 from phishing_detector.models import Finding
 from phishing_detector.scoring import WEIGHTS, analyze, score_of, to_indicators, verdict_for
 
@@ -34,7 +34,7 @@ def test_unknown_signal_is_an_error():
         to_indicators([Finding("no.such_signal", "r")])
 
 
-FAMILIES = [auth, sender, links, wording, attachments]
+FAMILIES = [auth, sender, links, wording, attachments, history]
 
 
 def test_every_signal_a_check_can_emit_has_a_weight():
@@ -54,3 +54,8 @@ def test_analyze_returns_a_complete_result():
     assert result.sender_domain is None
     assert len(result.email_sha256) == 64
     assert any("Body text only" in note for note in result.notes)
+
+
+def test_the_weight_table_has_exactly_the_signals_the_checks_emit():
+    emitted = set().union(*(module.SIGNALS for module in FAMILIES))
+    assert emitted == set(WEIGHTS)
