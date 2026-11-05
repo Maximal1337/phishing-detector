@@ -1,0 +1,17 @@
+# Terraform state, caches and real variable values
+# (terraform.tfvars.example is not matched by *.tfvars and stays tracked)
+*.tfstate*
+.terraform/
+*.tfvars
+
+# Local environment
+.env
+.venv/
+
+# Python
+__pycache__/
+.pytest_cache/
+
+# Public email corpora downloaded for evaluation; never committed.
+# Anchored to the repo root so phishing_detector/data/ stays tracked.
+/data/
