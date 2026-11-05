@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from .checks import auth
 from .models import Finding, Indicator, ParsedEmail, Result
 from .parser import parse
 
@@ -65,7 +66,7 @@ BODY_ONLY_NOTE = "Body text only (no email headers): authentication, sender and 
 Check = Callable[[ParsedEmail, list[str]], list[Finding]]
 
 # Checks that need the message headers, and checks that work on any input.
-EMAIL_CHECKS: list[Check] = []
+EMAIL_CHECKS: list[Check] = [auth.check]
 CONTENT_CHECKS: list[Check] = []
 
 

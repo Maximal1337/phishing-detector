@@ -1,5 +1,6 @@
 import pytest
 
+from phishing_detector.checks import auth
 from phishing_detector.models import Finding
 from phishing_detector.scoring import WEIGHTS, analyze, score_of, to_indicators, verdict_for
 
@@ -31,6 +32,14 @@ def test_indicators_get_category_and_weight_and_are_sorted_by_weight():
 def test_unknown_signal_is_an_error():
     with pytest.raises(ValueError):
         to_indicators([Finding("no.such_signal", "r")])
+
+
+FAMILIES = [auth]
+
+
+def test_every_signal_a_check_can_emit_has_a_weight():
+    for module in FAMILIES:
+        assert set(module.SIGNALS) <= set(WEIGHTS), module.__name__
 
 
 def test_weights_are_whole_numbers_within_range():
