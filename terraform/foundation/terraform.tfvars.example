@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (git-ignored) and fill in your own values.
+
+aws_profile         = "<your-aws-cli-profile>"
+allowed_account_ids = ["<your-12-digit-account-id>"]
+
+# Optional overrides (defaults shown):
+# region      = "eu-north-1"
+# name_prefix = "phishdet"
