@@ -73,9 +73,11 @@ resource "aws_db_instance" "main" {
 
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
-  # The stack is torn down after the review; no final snapshot, no lock.
-  skip_final_snapshot = true
-  deletion_protection = false
+  # The stack is torn down after the review: no final snapshot, automated
+  # backups deleted with the instance, no lock. Nothing outlives destroy.
+  skip_final_snapshot      = true
+  delete_automated_backups = true
+  deletion_protection      = false
 
   depends_on = [aws_cloudwatch_log_group.rds]
 }
