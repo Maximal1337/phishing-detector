@@ -24,7 +24,12 @@ MULTI_LABEL_SUFFIXES = frozenset(
 
 # Brand names shorter than this are not fuzzy-matched ("ups" would match far too much).
 MIN_BRAND_LENGTH = 5
-MAX_EDIT_DISTANCE = 2
+# A brand inside a longer domain label counts only from this length on, unless it is a
+# whole hyphen-separated part ("purchase" must not match "chase", "chase-secure" must).
+MIN_CONTAINED_LENGTH = 6
+# Edit distance allowed between a domain label and a brand label: 1 for short brands
+# ("maple" must not match "apple"), 2 from this brand length on.
+LONG_BRAND_LENGTH = 8
 
 # Characters that look alike, mapped to the letter they imitate (digits, Cyrillic, Greek).
 _HOMOGLYPHS = str.maketrans(
@@ -154,9 +159,10 @@ def imitated_brand_domain(host: str, brand_map: dict[str, tuple[str, ...]] | Non
     """The protected brand domain that `host` imitates, or None.
 
     A host imitates a brand domain when its registrable label, after folding
-    homoglyphs, equals the brand's label, is within edit distance 2 of it, or
-    contains it (e.g. examp1ebank, exarnplebank, examplebank-secure).
-    The brand's own domains never match.
+    homoglyphs and dropping hyphens, equals the brand's label (examp1ebank,
+    exarnplebank, examplebank on another TLD), is one or two edits away from it
+    (see LONG_BRAND_LENGTH), or contains it (examplebank-secure, see
+    MIN_CONTAINED_LENGTH). The brand's own domains never match.
     """
     brand_map = brands() if brand_map is None else brand_map
     registrable = registrable_domain(host)
@@ -164,27 +170,29 @@ def imitated_brand_domain(host: str, brand_map: dict[str, tuple[str, ...]] | Non
         return None
     if registrable in {d for domains in brand_map.values() for d in domains}:
         return None
-    candidate = skeleton(registrable.split(".")[0])
+    label = registrable.split(".")[0]
+    candidate = skeleton(label)
+    parts = {skeleton(part) for part in label.split("-")}
     for domains in brand_map.values():
         for domain in domains:
             brand = skeleton(domain.split(".")[0])
             if len(brand) < MIN_BRAND_LENGTH:
                 continue
-            if candidate == brand or brand in candidate or edit_distance(candidate, brand) <= MAX_EDIT_DISTANCE:
+            max_distance = 2 if len(brand) >= LONG_BRAND_LENGTH else 1
+            contained = brand in parts or (len(brand) >= MIN_CONTAINED_LENGTH and brand in candidate)
+            if candidate == brand or contained or edit_distance(candidate, brand) <= max_distance:
                 return domain
     return None
 
 
 def brands_named_in(text: str, brand_map: dict[str, tuple[str, ...]] | None = None) -> list[str]:
-    """Brand keywords that appear in free text such as a display name."""
+    """Brand keywords named in free text such as a display name.
+
+    A keyword matches a whole word, or up to four adjacent words written
+    together ("Example Bank" and "ExampleBank" both name "examplebank"),
+    so "Purchase Order" doesn't name "chase".
+    """
     brand_map = brands() if brand_map is None else brand_map
-    lowered = text.lower()
-    compact = re.sub(r"[^a-z0-9]", "", lowered)
-    found = []
-    for keyword in brand_map:
-        if len(keyword) >= MIN_BRAND_LENGTH:
-            if keyword in compact:
-                found.append(keyword)
-        elif re.search(rf"\b{re.escape(keyword)}\b", lowered):
-            found.append(keyword)
-    return found
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    joined = {"".join(words[i:j]) for i in range(len(words)) for j in range(i + 1, min(i + 4, len(words)) + 1)}
+    return [keyword for keyword in brand_map if keyword in joined]

@@ -1,0 +1,41 @@
+# Protected brands: a keyword, then the brand's own registrable domains.
+# Sender and link domains that imitate these domains are flagged as lookalikes,
+# and a display name that names a brand while the mail comes from another
+# domain is flagged as a brand mismatch.
+# Keywords shorter than 5 letters (dhl, ups) are matched as whole words in
+# display names only, never fuzzily against domains.
+
+paypal paypal.com
+apple apple.com icloud.com
+microsoft microsoft.com outlook.com live.com office.com microsoftonline.com
+google google.com gmail.com
+amazon amazon.com amazon.co.uk amazon.de
+netflix netflix.com
+facebook facebook.com facebookmail.com
+instagram instagram.com
+linkedin linkedin.com
+dropbox dropbox.com
+docusign docusign.com docusign.net
+adobe adobe.com
+chase chase.com
+wellsfargo wellsfargo.com
+bankofamerica bankofamerica.com bofa.com
+citibank citi.com citibank.com
+hsbc hsbc.com hsbc.co.uk
+coinbase coinbase.com
+binance binance.com
+fedex fedex.com
+dhl dhl.com
+ups ups.com
+usps usps.com
+royalmail royalmail.com
+whatsapp whatsapp.com
+github github.com
+zoom zoom.us
+ebay ebay.com
+walmart walmart.com
+leumi leumi.co.il
+hapoalim bankhapoalim.co.il
+
+# Demo brand used by the synthetic samples and the tests (reserved .test TLD, RFC 2606).
+examplebank examplebank.test
