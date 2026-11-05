@@ -86,6 +86,8 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
 - Logging: VPC flow logs (all traffic), PostgreSQL logs including statements slower than 500 ms, and the Valkey slow log, each in CloudWatch Logs for 7 days.
   The log-delivery permission for the Valkey slow log is a Terraform-managed resource policy limited to that log group,
   so AWS does not create a broader one of its own that `terraform destroy` would leave behind.
+- The ALB access-log bucket blocks all public access, lets only the ALB log-delivery service write under this account's prefix,
+  and denies every request without TLS. That deny is the one place a policy uses `*` (all principals, all S3 actions): it only ever takes access away.
 - The only IAM role in the foundation is for flow logs: it trusts `vpc-flow-logs.amazonaws.com` only for this account's flow logs and can write only to its log group.
 - Dependencies are pinned to exact versions, and each pinned version had been public for at least 7 days when it was pinned,
   so a broken or compromised release has time to be noticed and yanked before it reaches the image.
@@ -111,6 +113,16 @@ Each finding below is skipped in the code with an inline comment, for the reason
 | CKV_AWS_260 | ALB ingress rule | False positive: the source is the CloudFront managed prefix list, not 0.0.0.0/0. |
 | CKV_AWS_394 | Availability-zone data source | Only the first two zone names in sorted order are used; a new zone sorts after them. |
 | tflint `aws_elasticache_replication_group_default_parameter_group` | ElastiCache | No cache parameter is changed, so the default parameter group is enough. |
+| CKV_AWS_2, CKV_AWS_103, CKV2_AWS_20 | ALB listener | Without a domain there is no certificate for the ALB. Viewers get HTTPS from CloudFront (HTTP is redirected there); only CloudFront can reach the ALB. |
+| CKV_AWS_174, CKV2_AWS_42 | CloudFront | The default `*.cloudfront.net` certificate doesn't allow a custom certificate or a higher minimum TLS version; that needs a domain. |
+| CKV_AWS_68, CKV2_AWS_47, CKV2_AWS_28 | CloudFront, ALB | WAF is a paid add-on and not used; a next step. |
+| CKV_AWS_86 | CloudFront | Caching is off, so every request reaches the ALB, whose access logs record it. |
+| CKV_AWS_310 | CloudFront | One origin; availability comes from the ALB and the two instances behind it. |
+| CKV_AWS_374 | CloudFront | Reviewers may be anywhere; Basic auth limits access instead of geography. |
+| CKV_AWS_305 | CloudFront | The origin is an application that serves its own root path. |
+| CKV_AWS_150 | ALB | No deletion protection, so `terraform destroy` works. |
+| CKV_AWS_145 | ALB log bucket | ALB access logs support only SSE-S3, not KMS. |
+| CKV_AWS_18, CKV_AWS_21, CKV_AWS_144, CKV2_AWS_62 | ALB log bucket | It is the log bucket itself: no access log of it, no versioning or replica for 7-day logs, no event consumers. |
 
 ## Assumptions
 
@@ -134,4 +146,8 @@ _What would come next with more time._
 
 - A customer-managed KMS key for ECR, CloudWatch Logs, Secrets Manager, ElastiCache and the alarm topic (about $1 per month);
   it would close the KMS-related scanner findings listed under Security.
+- A custom domain: an ACM certificate on CloudFront (TLS 1.2+ minimum) and HTTPS between CloudFront and the ALB,
+  or a CloudFront VPC origin so the ALB can be internal. Optionally a secret origin header checked by the ALB, so only this distribution
+  (not any CloudFront distribution) can reach it.
+- AWS WAF on CloudFront (rate limiting, managed rule groups).
 - ElastiCache IAM authentication for Valkey, so the app connects with its instance role instead of relying on network access alone.
