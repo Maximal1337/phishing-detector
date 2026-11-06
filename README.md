@@ -212,7 +212,11 @@ _How ambiguous points in the assignment were interpreted._
 _What the detector and the infrastructure do not cover._
 
 - The detector is rule-based: a well-written phishing email with no technical tells (clean domain, no links or attachments,
-  neutral wording) scores low. The weights are set by hand, not learned.
+  neutral wording) scores low. On public data it catches about 22 % of phishing at the phishing level and 43 % at
+  "suspicious", with under 1 % false positives (see Evaluation); most misses link to domains no rule flags.
+- Some weights are tuned on public corpora whose legitimate mail is from 2002 and mostly personal or mailing-list mail;
+  modern transactional mail ("Dear customer", payment updates, password resets) is underrepresented,
+  so the wording weights are probably too high for it. The others are set by hand.
 - Without the full Public Suffix List, the registrable domain is "the last two labels", plus a short list of
   two-label suffixes such as `co.uk` and `co.il`.
 - Lookalike detection only protects the brands listed in `phishing_detector/data/brands.txt`; the TLD and shortener lists are hand-picked.
@@ -238,10 +242,58 @@ _Source and license of every data set used for testing and evaluation._
   ([RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) domains such as `example.com` and `.test`,
   [RFC 5737](https://www.rfc-editor.org/rfc/rfc5737) documentation addresses) and placeholder attachment bytes.
   `tests/test_samples.py` pins the expected verdict of each.
+- Phishing for the evaluation: [Nazario phishing corpus](https://monkey.org/~jose/phishing/) by Jose Nazario,
+  files `phishing-2023`, `phishing-2024`, `phishing-2025` (1303 messages), license CC BY 4.0.
+- Legitimate mail for the evaluation: [SpamAssassin public corpus](https://spamassassin.apache.org/old/publiccorpus/),
+  `20030228_easy_ham`, `easy_ham_2` and `hard_ham` (4150 messages, 2002-2003); no formal license,
+  "Copyright for the text in the messages remains with the original senders".
+- Neither corpus is in this repository: `scripts/fetch_datasets.py` downloads them into a Docker volume and checks pinned SHA-256 values.
+  Only aggregate results are published ([docs/evaluation.md](docs/evaluation.md)).
+
+## Evaluation
+
+The detector was measured on the public corpora above; full results and method in [docs/evaluation.md](docs/evaluation.md).
+On the held-out test split (379 phishing, 1250 legitimate), without the signals that only tell the corpora's eras apart:
+
+| Flagged at | Precision | Recall | False-positive rate |
+|---|---|---|---|
+| phishing (score ≥ 50) | 0.976 | 0.219 | 0.2 % |
+| suspicious or worse (score ≥ 25) | 0.942 | 0.430 | 0.8 % |
+
+When it says phishing it is nearly always right, but it misses many modern phishing mails that link to unremarkable
+domains without tell-tale wording. The legitimate mail is from 2002 and the phishing from 2023-2025, so signals that
+depend on the era (all `auth.*`, punycode, new TLDs, URL shorteners) were left out of the tuning and of the headline numbers.
+The weights marked `tuned` in [`scoring.py`](phishing_detector/scoring.py) come from a one-parameter rule on the dev split
+(weight = k x ln of how much more often a signal fires in phishing), explained in the evaluation document.
+
+**Reproduce it** (Docker; the corpora go into a named volume, never onto the host filesystem;
+the repository is mounted read-only; only the download step has network access):
+
+```bash
+docker volume create phishdet-corpora
+IMAGE=python:3.13.17-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+
+# 1. Download and verify the six files (network on).
+docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+  -v "$(pwd):/src:ro" -v phishdet-corpora:/data \
+  $IMAGE python -I -B /src/scripts/fetch_datasets.py --dest /data
+
+# 2. Evaluate (no network, unprivileged user, data read-only); --split dev or test.
+docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+  --user 65534:65534 -v "$(pwd):/src:ro" -v phishdet-corpora:/data:ro \
+  $IMAGE python -I -B /src/scripts/evaluate.py --data /data --split test
+```
+
+Run it from the repository root (in Git Bash on Windows, set `MSYS_NO_PATHCONV=1` first).
+The report goes to standard output; it contains only counts, metrics and signal ids.
 
 ## Next steps
 
 _What would come next with more time._
+
+- Detector: a modern legitimate corpus (same era as the phishing) to tune all signals, including `auth.*`, and to measure
+  false positives on transactional mail; learning the weights with logistic regression over the same rules (still one
+  readable weight per rule); an optional URL-reputation lookup for the links that no static rule flags.
 
 - A NAT gateway in each Availability Zone, each app subnet routed to the one in its own zone
   (about $1.22 per day per extra NAT gateway with its public IPv4 address).
