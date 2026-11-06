@@ -108,15 +108,15 @@ class PostgresHistory:
 
 
 class NoCache:
-    def get(self, sha256: str) -> dict | None:
+    def get(self, key: str) -> dict | None:
         return None
 
-    def set(self, sha256: str, result: dict) -> None:
+    def set(self, key: str, result: dict) -> None:
         pass
 
 
 class ValkeyCache:
-    """The email's static analysis (no history, no score) under `static:<sha256>` for an hour."""
+    """The email's static analysis (no history, no score) under `static:<rules version>:<sha256>` for an hour."""
 
     TTL_SECONDS = 3600
 
@@ -125,9 +125,9 @@ class ValkeyCache:
 
         self._client = redis.Redis.from_url(url, socket_timeout=1, socket_connect_timeout=1)
 
-    def get(self, sha256: str) -> dict | None:
-        value = self._client.get(f"static:{sha256}")
+    def get(self, key: str) -> dict | None:
+        value = self._client.get(f"static:{key}")
         return json.loads(value) if value else None
 
-    def set(self, sha256: str, result: dict) -> None:
-        self._client.setex(f"static:{sha256}", self.TTL_SECONDS, json.dumps(result))
+    def set(self, key: str, result: dict) -> None:
+        self._client.set(f"static:{key}", json.dumps(result), ex=self.TTL_SECONDS)

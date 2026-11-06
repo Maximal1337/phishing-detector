@@ -25,6 +25,7 @@ from flask import Flask, g, jsonify, request, send_from_directory
 
 from phishing_detector.models import StaticAnalysis
 from phishing_detector.scoring import analyze_static, finish
+from phishing_detector.version import rules_version as current_rules_version
 
 from . import credentials
 from .storage import MemoryHistory, NoCache, PostgresHistory, ValkeyCache, scan_row
@@ -81,12 +82,14 @@ def create_app(
     cache=None,
     auth: Callable[[], tuple[str, str] | None] | None = None,
     version: str | None = None,
+    rules_version: str | None = None,
 ) -> Flask:
     if history is None and cache is None and auth is None:
         settings = _from_environment()
     else:
         settings = {"history": history or MemoryHistory(), "cache": cache or NoCache(), "auth": auth or (lambda: None), "version": version or "test"}
     history, cache, auth, version = settings["history"], settings["cache"], settings["auth"], settings["version"]
+    rules_version = rules_version or current_rules_version()  # part of every cache key
     try:
         if auth() is None:
             log_event("auth_disabled", reason="no Basic auth credentials configured; local use only")
@@ -127,7 +130,7 @@ def create_app(
 
     @app.get("/healthz")
     def healthz():
-        return jsonify(status="ok", version=version)
+        return jsonify(status="ok", version=version, rules_version=rules_version)
 
     @app.get("/")
     def index():
@@ -148,8 +151,9 @@ def create_app(
         # score are computed on every request, so a later flag on the sender always shows.
         static, cached = None, False
         sha256 = hashlib.sha256(raw).hexdigest()  # the same id the detector reports
+        key = f"{rules_version}:{sha256}"  # another detector version never reuses this entry
         try:
-            if data := cache.get(sha256):
+            if data := cache.get(key):
                 static, cached = StaticAnalysis.from_dict(data), True
         except Exception as exc:  # the cache is an optimisation: carry on without it
             log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
@@ -158,7 +162,7 @@ def create_app(
         result = finish(static, history=LoggedHistory(history)).to_dict()
         if not cached and result["history_status"] != "unavailable":  # nothing from an outage is kept
             try:
-                cache.set(sha256, static.to_dict())
+                cache.set(key, static.to_dict())
             except Exception as exc:
                 log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
 

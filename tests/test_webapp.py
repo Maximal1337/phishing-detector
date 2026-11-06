@@ -62,7 +62,8 @@ def _scan(client, raw: bytes, **headers):
 def test_healthz_needs_no_auth_and_no_database():
     response = _client(history=BrokenHistory(fail_read=True, fail_write=True)).get("/healthz")
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ok", "version": "abc123"}
+    body = response.get_json()
+    assert (body["status"], body["version"]) == ("ok", "abc123") and len(body["rules_version"]) == 12
 
 
 @pytest.mark.parametrize("headers", [{}, _basic("reviewer", "wrong"), _basic("other", CREDS[1]), {"Authorization": "Bearer x"}])
@@ -219,3 +220,30 @@ def test_outage_result_is_not_cached_and_recovery_drops_the_raise():
     after = _scan(client, raw).get_json()
     assert (after["history_status"], after["raised_from"], after["verdict"], after["cached"]) == ("ok", None, "likely_legitimate", False)
     assert _scan(client, raw).get_json()["cached"] is True
+
+
+def test_another_detector_version_misses_the_cache():
+    cache, raw = DictCache(), (SAMPLES / "legit_receipt.eml").read_bytes()
+
+    def client(rules_version):
+        return create_app(history=MemoryHistory(), cache=cache, auth=lambda: CREDS, rules_version=rules_version).test_client()
+
+    old, new = client("aaaaaaaaaaaa"), client("bbbbbbbbbbbb")
+    assert [_scan(old, raw).get_json()["cached"] for _ in range(2)] == [False, True]
+    assert [_scan(new, raw).get_json()["cached"] for _ in range(2)] == [False, True]  # a rollout starts cold
+    assert _scan(old, raw).get_json()["cached"] is True  # and a rollback finds its own entries
+    assert sorted(k.split(":")[0] for k in cache.items) == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+
+
+def test_rules_version_changes_with_any_rule_file(tmp_path):
+    import shutil
+
+    from phishing_detector import version
+
+    copy = tmp_path / "pd"
+    shutil.copytree(version.PACKAGE, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    before = version.fingerprint(copy)
+    assert before == version.rules_version() and len(before) == 12
+    brands = copy / "data" / "brands.txt"
+    brands.write_text(brands.read_text(encoding="utf-8") + "newbrand newbrand.test" + chr(10), encoding="utf-8")
+    assert version.fingerprint(copy) != before

@@ -270,6 +270,12 @@ _What the detector and the infrastructure do not cover._
 - Some weights are tuned on public corpora whose legitimate mail is from 2002 and mostly personal or mailing-list mail;
   the modern legitimate set is a technical mailing list. Modern transactional mail ("Dear customer", payment updates,
   password resets, HTML buttons) is underrepresented in both, so expect more false positives on it. The others are set by hand.
+- The Valkey cache saves little. It keeps only the email's own analysis, keyed by the detector's rules version and the
+  email's SHA-256 (the history check and the score run on every request). Measured in the container: the analysis takes
+  3 ms at the median and 14 ms at the 95th percentile on corpus mail (15 synthetic samples: 1.7 / 4.3 ms), while a cache
+  read in compose takes 0.07 ms. And byte-identical repeats are rare: the mails of one campaign differ in recipient,
+  links and tracking ids, so each has its own SHA-256. The cache is there as the ElastiCache part of the assignment and
+  as the pattern a slower detector (URL reputation, a model) would need.
 - Links wrapped by a mail gateway's link protection are unwrapped statically (Microsoft Safe Links: the `url` parameter;
   Proofpoint URL Defense v2 and v3: their own encoding) and every link check runs on the real target. Mimecast-protected
   links carry the target in an opaque token and can't be unwrapped offline; they are judged as links to Mimecast.
