@@ -22,6 +22,14 @@ _MESSAGE_HEADERS = ("From", "Received", "Subject", "Date", "Message-ID", "Return
 
 _URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)[^\s<>\"'`]+")
 _URL_TRAILING = ".,;:!?)]}'\""
+_RECIPIENT_HEADERS = ("To", "Cc", "Delivered-To", "X-Original-To")
+# Invisible characters wedged between letters, used to break up words that filters look for.
+_ZERO_WIDTH_IN_WORD = re.compile("[^\\W\\d_][​‌‍⁠﻿­]+[^\\W\\d_]")
+_HIDDEN_STYLE = re.compile(
+    r"display\s*:\s*none|visibility\s*:\s*hidden|(?:font-size|opacity)\s*:\s*0(?:\.0+)?(?:px|pt|em|rem|%)?\s*(?:;|!|$)",
+    re.IGNORECASE,
+)
+_VOID_TAGS = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 
 MAX_LINKS = 200
 
@@ -45,6 +53,7 @@ def parse(raw: bytes) -> ParsedEmail:
         return_path_domain=_domain_of(parseaddr(_header(msg, "Return-Path"))[1]),
         auth_results=_topmost(msg, "Authentication-Results"),
         subject=_header(msg, "Subject"),
+        to_addresses=sorted({a.lower() for name in _RECIPIENT_HEADERS for _, a in _addresses(msg, name)}),
     )
 
     texts: list[str] = []
@@ -60,6 +69,7 @@ def parse(raw: bytes) -> ParsedEmail:
             body = _text_of(part)
             texts.append(body)
             parsed.links.extend(_links_in_text(body))
+            parsed.plain_text_chars += len("".join(body.split()))
         elif content_type == "text/html":
             scan = _HtmlScan()
             try:
@@ -72,9 +82,14 @@ def parse(raw: bytes) -> ParsedEmail:
             parsed.links.extend(scan.links)
             parsed.links.extend(_links_in_text(visible))
             parsed.password_inputs += scan.password_inputs
+            parsed.has_html = True
+            parsed.image_count += scan.images
+            parsed.hidden_text_chars += scan.hidden_chars
+            parsed.visible_html_chars += scan.visible_chars
 
     parsed.text = "\n".join(texts)
     parsed.links = _dedupe(parsed.links)[:MAX_LINKS]
+    parsed.zero_width_in_words = len(_ZERO_WIDTH_IN_WORD.findall(f"{parsed.subject}\n{parsed.text}"))
     return parsed
 
 
@@ -174,16 +189,20 @@ def _dedupe(links: list[Link]) -> list[Link]:
 
 
 class _HtmlScan(HTMLParser):
-    """Collects anchors, password inputs and visible text. Nothing is rendered or loaded."""
+    """Collects anchors, password inputs, images and text (visible and CSS-hidden). Nothing is rendered or loaded."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.links: list[Link] = []
         self.text: list[str] = []
         self.password_inputs = 0
+        self.images = 0
+        self.hidden_chars = 0
+        self.visible_chars = 0
         self._anchor_href: str | None = None
         self._anchor_text: list[str] = []
         self._skip = 0  # inside <script> or <style>
+        self._open: list[tuple[str, bool]] = []  # open elements and whether each one hides its content
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {k.lower(): (v or "") for k, v in attrs}
@@ -194,6 +213,11 @@ class _HtmlScan(HTMLParser):
             self._anchor_text = []
         elif tag == "input" and attributes.get("type", "").lower() == "password":
             self.password_inputs += 1
+        elif tag == "img":
+            self.images += 1
+        if tag not in _VOID_TAGS:
+            hides = "hidden" in attributes or bool(_HIDDEN_STYLE.search(attributes.get("style", "")))
+            self._open.append((tag, hides))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style") and self._skip:
@@ -202,6 +226,10 @@ class _HtmlScan(HTMLParser):
             text = " ".join("".join(self._anchor_text).split())
             self.links.append(Link(href=self._anchor_href, text=text, source="html"))
             self._anchor_href = None
+        for i in range(len(self._open) - 1, -1, -1):  # close up to the matching open element, if any
+            if self._open[i][0] == tag:
+                del self._open[i:]
+                break
 
     def handle_data(self, data: str) -> None:
         if self._skip:
@@ -209,3 +237,8 @@ class _HtmlScan(HTMLParser):
         self.text.append(data)
         if self._anchor_href is not None:
             self._anchor_text.append(data)
+        chars = len("".join(data.split()))
+        if any(hides for _, hides in self._open):
+            self.hidden_chars += chars
+        else:
+            self.visible_chars += chars

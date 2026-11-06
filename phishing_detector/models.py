@@ -38,6 +38,13 @@ class ParsedEmail:
     links: list[Link] = field(default_factory=list)
     password_inputs: int = 0  # <input type="password"> elements in HTML parts
     attachments: list[Attachment] = field(default_factory=list)
+    to_addresses: list[str] = field(default_factory=list)  # To, Cc, Delivered-To, X-Original-To (lower case)
+    has_html: bool = False
+    image_count: int = 0  # <img> elements in HTML parts
+    hidden_text_chars: int = 0  # text inside elements hidden with CSS (display:none, font-size:0, ...)
+    visible_html_chars: int = 0  # non-blank text in HTML parts that a reader can see
+    plain_text_chars: int = 0  # non-blank text in text/plain parts
+    zero_width_in_words: int = 0  # invisible characters between two letters ("Pa​yPal")
 
 
 @dataclass(frozen=True)
