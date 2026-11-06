@@ -217,7 +217,25 @@ _Using the web UI and the HTTP API on the deployed stack._
 
 ## Monitor
 
-_Dashboard, alarms, where the application logs are, and how to check instance health, CPU and memory, request counts and errors._
+- **Dashboard** `phishdet-overview` (CloudWatch): healthy and unhealthy targets; instances in service, desired, and EC2 status
+  checks; requests through the load balancer; answers by status (app 2xx, 4xx, 5xx, load balancer 5xx); response time
+  p50 and p95; CPU; memory and disk from the CloudWatch agent; RDS CPU, connections and free storage; the app's failure
+  events; and a table of the latest log events other than successful requests.
+- **Logs:** the app writes one JSON line per request and per failure event (never email content) to
+  `/phishdet/app`, one stream per instance; boot logs go to `/phishdet/cloud-init`. Successful health checks aren't logged.
+  Metric filters count `history_read_failed`, `history_write_failed`, `cache_failed` and `cache_decode_failed`.
+- **Saved Logs Insights queries:** `phishdet/errors-by-type`, `phishdet/scans-by-verdict`, `phishdet/scan-latency`.
+- **Alarms** go to an SNS e-mail topic (the address is a Terraform variable; confirm the subscription mail), each with an
+  OK notice when it recovers: unhealthy targets, 5xx answers (this includes 503 when the Basic-auth secret can't be read,
+  while `/healthz` stays 200), app CPU, RDS CPU, RDS free storage, and history-store errors (scans then fall back to
+  cautious verdicts).
+- **Planned replacement vs sudden failure.** A rollout or rollback (instance refresh) had no failed request: an old
+  instance is taken out of the load balancer first (deregistration, 30 s to finish requests in flight) and only then
+  stopped. A sudden failure is different: until the health check notices it, the load balancer keeps sending part of
+  the traffic to the dead instance and those requests get 502. With checks every 15 s and 2 failures to mark a target
+  unhealthy, that window is up to about 30 s. The interval is a trade-off: shorter detects faster but marks a target
+  unhealthy on a brief hiccup (a slow start, a garbage-collection pause) and adds check traffic; longer means a longer
+  502 window. 15 s × 2 is kept.
 
 ## Tear down
 
