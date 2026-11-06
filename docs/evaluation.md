@@ -85,7 +85,7 @@ The lower k costs a little recall at ≥ 50 without era signals (0.190 to 0.169)
 **ham-2024 dev check (1975 messages).** The first run flagged 2.8 % of it at ≥ 25 (all signals). Two causes, both narrowed:
 - Link-protection wrappers (Microsoft Defender Safe Links, also Proofpoint and Mimecast) rewrite every link into a redirect
   that carries the recipient's address, so `links.redirect_param` and `links.recipient_in_url` fired together (17 mails).
-  Those two signals now skip such wrappers.
+  Those two signals then skipped such wrappers; after test run 2 this was replaced by unwrapping them (see below).
 - `github.io` (GitHub Pages) counted as a lookalike of `github.com` (14 mails); it is now one of GitHub's own domains.
   It stays on the free-hosting list (`links.abused_hosting`, 20, not enough alone).
 
@@ -98,6 +98,21 @@ The commonest remaining single cause is `wording.credentials` (25) in questions 
 ham-2002 0 %). None of it has an SPF, DKIM or DMARC failure (phishing: SPF fail 4.5 %, softfail 11.0 %, DKIM fail 1.5 %,
 DMARC fail 1.7 %). So the `auth.*` failure signals cause no false positives here; their weights stay hand-set.
 
+## Anti-evasion changes after test run 2 (dev only)
+
+Two changes close ways an attacker could switch signals off; both were measured on dev only.
+- **Subscription links.** `links.recipient_in_url` now ignores a link only if its visible text says unsubscribe,
+  opt out, preferences or manage subscription, or if it is the URL in the `List-Unsubscribe` header. The URL path no
+  longer counts (the sender chooses it): a link to `/unsubscribe/` reading "Verify account" is flagged.
+- **Link-protection wrappers.** Instead of skipping them, Safe Links (`url` parameter) and Proofpoint URL Defense v2/v3
+  (their own encoding) are unwrapped statically, also when nested, and every link check runs on the inner URL.
+  Mimecast's opaque token can't be unwrapped.
+
+Shift on dev: at most **0.4 points** (precision at ≥ 25 without era signals, 0.909 → 0.905); recall at ≥ 25 unchanged
+(0.560 / 0.763), at ≥ 50 down 0.1 point (0.169 → 0.168, 0.368 → 0.367); ham-2002 flagged at ≥ 25 1.8 % → 1.9 %,
+ham-2024 1.3 % (25 → 26 of 1975). The tuning rule still picks k = 6 with the same weights. As the shift is under
+0.5 points, the test split was not run a third time; the test numbers above are from test run 2, before these changes.
+
 ## Caveats
 
 - Both legitimate sets are proxies (see "Two proxies" above). Modern transactional mail from banks and shops ("Dear customer",
@@ -106,7 +121,7 @@ DMARC fail 1.7 %). So the `auth.*` failure signals cause no false positives here
 - Nazario's corpus is one person's inbox, hand-classified ("it could contain errors"), so it is representative, not exhaustive.
 - 1303 phishing messages are enough for the frequent signals; rare ones (executables, macros, password fields) had too few
   hits to tune and keep their hand-set weights.
-- Link-protection wrappers are skipped, not unwrapped: a phishing link behind Safe Links is judged only by its other signals.
+- Mimecast-protected links carry the target in an opaque token and can't be unwrapped offline; they are judged as links to Mimecast.
 
 ## Appendix A: test run 2 report
 

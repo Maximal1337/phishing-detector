@@ -220,8 +220,9 @@ _What the detector and the infrastructure do not cover._
 - Some weights are tuned on public corpora whose legitimate mail is from 2002 and mostly personal or mailing-list mail;
   the modern legitimate set is a technical mailing list. Modern transactional mail ("Dear customer", payment updates,
   password resets, HTML buttons) is underrepresented in both, so expect more false positives on it. The others are set by hand.
-- Links wrapped by a mail gateway's link protection (Microsoft Safe Links, Proofpoint, Mimecast) are not unwrapped:
-  the redirect and recipient-address signals skip them, so the real target is not checked.
+- Links wrapped by a mail gateway's link protection are unwrapped statically (Microsoft Safe Links: the `url` parameter;
+  Proofpoint URL Defense v2 and v3: their own encoding) and every link check runs on the real target. Mimecast-protected
+  links carry the target in an opaque token and can't be unwrapped offline; they are judged as links to Mimecast.
 - Without the full Public Suffix List, the registrable domain is "the last two labels", plus a short list of
   two-label suffixes such as `co.uk` and `co.il`.
 - Lookalike detection only protects the brands listed in `phishing_detector/data/brands.txt`; the TLD and shortener lists are hand-picked.
@@ -280,6 +281,11 @@ eras apart (second test run, after a recall iteration on dev; the first run is i
 With all signals counted, recall is 0.404 at ≥ 50 and 0.760 at ≥ 25 (false positives 1.6 % and 1.4 % at ≥ 25).
 
 When it says phishing it is nearly always right; "suspicious" catches more than half.
+
+**Working threshold: ≥ 25.** "Suspicious" means "don't trust this mail before checking it another way"; ≥ 50 ("phishing")
+is the high-confidence verdict. **Overfitting check:** one tuning parameter, picked on dev only, and dev and test agree
+(at ≥ 25 without era signals, recall 0.560 on dev and 0.559 on test; ham-2002 false positives 1.8 % and 1.5 %).
+Two anti-evasion changes made after test run 2 moved the dev metrics by at most 0.4 points, so the test split was not run again.
 The tuning ham is from 2002 and the phishing from 2023-2025, so signals that depend on the era (all `auth.*`, punycode,
 new TLDs, URL shorteners, free hosting, redirects, buttons, HTML tricks) were left out of the tuning and of the headline
 numbers and keep small hand-set weights. On modern legitimate mail (ham-2024) none of the `auth.*` failures fired.
@@ -315,7 +321,7 @@ _What would come next with more time._
   - URL reputation for links that no rule flags ([Google Safe Browsing](https://developers.google.com/safe-browsing),
     [URLhaus](https://urlhaus.abuse.ch/)), sending only the URL, never the email;
   - domain age from [RDAP](https://about.rdap.org/): phishing domains are often days old;
-  - unwrap link-protection redirects (Safe Links, Proofpoint, Mimecast) and check the real target;
+  - resolve Mimecast-protected links (opaque token, needs Mimecast's API) to check their real target;
   - machine learning on modern labelled data (phishing and legitimate mail of the same era, with headers),
     starting with logistic regression over these same rules so each rule keeps one readable weight.
 
