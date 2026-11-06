@@ -1,3 +1,4 @@
+from pathlib import Path
 import pytest
 
 from phishing_detector.checks import attachments, auth, content, history, links, sender, wording
@@ -59,3 +60,16 @@ def test_analyze_returns_a_complete_result():
 def test_the_weight_table_has_exactly_the_signals_the_checks_emit():
     emitted = set().union(*(module.SIGNALS for module in FAMILIES))
     assert emitted == set(WEIGHTS)
+
+
+def test_static_analysis_survives_a_cache_round_trip():
+    import json
+
+    from phishing_detector.checks.history import InMemoryHistory
+    from phishing_detector.models import StaticAnalysis
+    from phishing_detector.scoring import analyze, analyze_static, finish
+
+    for path in sorted((Path(__file__).resolve().parent.parent / "samples").iterdir()):
+        raw = path.read_bytes()
+        restored = StaticAnalysis.from_dict(json.loads(json.dumps(analyze_static(raw).to_dict())))
+        assert finish(restored, InMemoryHistory()) == analyze(raw, InMemoryHistory()), path.name

@@ -67,6 +67,31 @@ class Indicator:
 
 
 @dataclass
+class StaticAnalysis:
+    """What depends only on the email itself, so it can be cached by the email's SHA-256.
+
+    The history check and the scoring are not part of it: they run on every request.
+    """
+
+    input_type: str
+    sender_domain: str | None
+    email_sha256: str
+    findings: list[Finding]
+    notes: list[str]
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        for finding in data["findings"]:
+            finding["evidence"] = list(finding["evidence"])
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> StaticAnalysis:
+        findings = [Finding(f["id"], f["reason"], tuple(f["evidence"])) for f in data["findings"]]
+        return cls(data["input_type"], data["sender_domain"], data["email_sha256"], findings, list(data["notes"]))
+
+
+@dataclass
 class Result:
     input_type: str
     verdict: str  # "phishing", "suspicious" or "likely_legitimate"

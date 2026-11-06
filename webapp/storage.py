@@ -116,7 +116,7 @@ class NoCache:
 
 
 class ValkeyCache:
-    """Full result JSON under `scan:<sha256>` for an hour (D-29)."""
+    """The email's static analysis (no history, no score) under `static:<sha256>` for an hour."""
 
     TTL_SECONDS = 3600
 
@@ -126,8 +126,8 @@ class ValkeyCache:
         self._client = redis.Redis.from_url(url, socket_timeout=1, socket_connect_timeout=1)
 
     def get(self, sha256: str) -> dict | None:
-        value = self._client.get(f"scan:{sha256}")
+        value = self._client.get(f"static:{sha256}")
         return json.loads(value) if value else None
 
     def set(self, sha256: str, result: dict) -> None:
-        self._client.setex(f"scan:{sha256}", self.TTL_SECONDS, json.dumps(result))
+        self._client.setex(f"static:{sha256}", self.TTL_SECONDS, json.dumps(result))

@@ -187,3 +187,35 @@ def test_poisoning_rule_in_the_memory_store():
     history.record({**row, "signals": [{"id": "auth.dmarc_pass", "weight": 0}]})
     assert history.count_trusted_flags("examplebank.test", "b" * 64) == 1
     assert history.count_trusted_flags("examplebank.test", "a" * 64) == 0  # the same email doesn't flag itself
+
+
+def test_cached_email_still_gets_a_fresh_history_check():
+    history, cache = MemoryHistory(), DictCache()
+    client = _client(history=history, cache=cache)
+    shop = "shop.example.net"
+    a = make_email(from_=f"Shop <news@{shop}>", subject="Your order", text="Hello, your order has shipped.\n")
+    b = make_email(
+        from_=f"Shop <billing@{shop}>",
+        auth=[f"mx.example.org; spf=pass; dmarc=pass header.from={shop}"],
+        text="Dear customer, verify your account within 24 hours or it will be suspended: http://192.0.2.10/login\n",
+    )
+    first = _scan(client, a).get_json()
+    assert first["cached"] is False and "history.domain_flagged" not in [i["id"] for i in first["indicators"]]
+    assert _scan(client, b).get_json()["verdict"] == "phishing"  # B proves it came from the domain (DMARC pass)
+    again = _scan(client, a).get_json()
+    assert again["cached"] is True
+    assert "history.domain_flagged" in [i["id"] for i in again["indicators"]]
+    assert again["score"] > first["score"]
+
+
+def test_outage_result_is_not_cached_and_recovery_drops_the_raise():
+    history, cache = BrokenHistory(fail_read=True), DictCache()
+    client = _client(history=history, cache=cache)
+    raw = make_email(text="Please reply within 24 hours.\n")  # urgency only: 10, raised to suspicious in an outage
+    during = _scan(client, raw).get_json()
+    assert (during["history_status"], during["raised_from"], during["verdict"]) == ("unavailable", "likely_legitimate", "suspicious")
+    assert not cache.items  # nothing from the outage is kept
+    history.fail_read = False
+    after = _scan(client, raw).get_json()
+    assert (after["history_status"], after["raised_from"], after["verdict"], after["cached"]) == ("ok", None, "likely_legitimate", False)
+    assert _scan(client, raw).get_json()["cached"] is True

@@ -23,7 +23,8 @@ from typing import Callable
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
-from phishing_detector.scoring import analyze
+from phishing_detector.models import StaticAnalysis
+from phishing_detector.scoring import analyze_static, finish
 
 from . import credentials
 from .storage import MemoryHistory, NoCache, PostgresHistory, ValkeyCache, scan_row
@@ -112,7 +113,7 @@ def create_app(
         return None
 
     @app.after_request
-    def finish(response):
+    def add_headers_and_log(response):
         response.headers.update(SECURITY_HEADERS)
         response.headers["X-Request-Id"] = g.get("request_id", "")
         duration = round((time.perf_counter() - g.get("started", time.perf_counter())) * 1000, 1)
@@ -143,17 +144,21 @@ def create_app(
         if not raw.strip():
             return jsonify(error="send an email file (field 'email') or pasted text (field 'text')"), 400
 
-        result, cached = None, False
+        # The cache holds only what depends on the email itself; the history check and the
+        # score are computed on every request, so a later flag on the sender always shows.
+        static, cached = None, False
         sha256 = hashlib.sha256(raw).hexdigest()  # the same id the detector reports
         try:
-            result = cache.get(sha256)
-            cached = result is not None
+            if data := cache.get(sha256):
+                static, cached = StaticAnalysis.from_dict(data), True
         except Exception as exc:  # the cache is an optimisation: carry on without it
             log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
-        if result is None:
-            result = analyze(raw, history=LoggedHistory(history)).to_dict()
+        if static is None:
+            static = analyze_static(raw)
+        result = finish(static, history=LoggedHistory(history)).to_dict()
+        if not cached and result["history_status"] != "unavailable":  # nothing from an outage is kept
             try:
-                cache.set(sha256, result)
+                cache.set(sha256, static.to_dict())
             except Exception as exc:
                 log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
 

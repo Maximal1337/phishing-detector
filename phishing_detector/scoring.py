@@ -11,7 +11,7 @@ from collections.abc import Callable
 from .checks import attachments, auth, content, links, sender, wording
 from .checks import history as history_check
 from .checks.history import HistoryStore
-from .models import Finding, Indicator, ParsedEmail, Result
+from .models import Finding, Indicator, ParsedEmail, Result, StaticAnalysis
 from .parser import parse
 
 # Weights marked "tuned" come from scripts/evaluate.py on the dev split of the
@@ -129,6 +129,11 @@ def cautious_verdict(score: int) -> str:
 
 def analyze(raw: bytes, history: HistoryStore | None = None) -> Result:
     """Scan one email. `history` is the scan-history store; without it the history check is skipped."""
+    return finish(analyze_static(raw), history)
+
+
+def analyze_static(raw: bytes) -> StaticAnalysis:
+    """Every check that looks only at the email itself (no history, no scoring)."""
     parsed = parse(raw)
     notes: list[str] = []
     findings: list[Finding] = []
@@ -140,14 +145,19 @@ def analyze(raw: bytes, history: HistoryStore | None = None) -> Result:
         notes.append(BODY_ONLY_NOTE)
     for check in CONTENT_CHECKS:
         findings.extend(check(parsed, notes))
+    return StaticAnalysis(parsed.input_type, parsed.from_domain or None, parsed.sha256, findings, notes)
 
+
+def finish(static: StaticAnalysis, history: HistoryStore | None = None) -> Result:
+    """Add the history check (fresh on every call) and score the result."""
+    findings, notes = list(static.findings), list(static.notes)
     history_status = "skipped"
-    if parsed.input_type == "email" and parsed.from_domain:
+    if static.input_type == "email" and static.sender_domain:
         if history is None:
             notes.append(NO_HISTORY_NOTE)
         else:
             try:
-                findings.extend(history_check.check(parsed.from_domain, parsed.sha256, history))
+                findings.extend(history_check.check(static.sender_domain, static.email_sha256, history))
                 history_status = "ok"
             except Exception:  # a failing store (e.g. database down) must not stop the scan
                 history_status = "unavailable"
@@ -161,13 +171,13 @@ def analyze(raw: bytes, history: HistoryStore | None = None) -> Result:
         raised_from, verdict, raise_reason = verdict, cautious_verdict(score), HISTORY_UNAVAILABLE_REASON
 
     return Result(
-        input_type=parsed.input_type,
+        input_type=static.input_type,
         verdict=verdict,
         score=score,
         indicators=indicators,
         notes=notes,
-        sender_domain=parsed.from_domain or None,
-        email_sha256=parsed.sha256,
+        sender_domain=static.sender_domain,
+        email_sha256=static.email_sha256,
         history_status=history_status,
         raised_from=raised_from,
         raise_reason=raise_reason,
