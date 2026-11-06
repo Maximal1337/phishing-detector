@@ -31,7 +31,19 @@ SOURCES = [
     {"label": "ham", "corpus": "spamassassin", "name": "20030228_hard_ham.tar.bz2", "url": SPAMASSASSIN + "20030228_hard_ham.tar.bz2", "size": 1029898, "sha256": "ce2ce67880643dbde65ea7f85bffbfe4417349c4bd80b6b0de56262ae6b0a9c9"},
 ]  # fmt: skip
 
+# Modern legitimate mail: the public users@tomcat.apache.org archive, one mbox per month,
+# 2024-01 to 2025-10. The archive builds these files on request, so their size isn't known
+# in advance; SHA-256 is pinned after the first download like the others.
+APACHE = "https://lists.apache.org/api/mbox.lua?list=users&domain=tomcat.apache.org&d="
+APACHE_MONTHS = [f"{y}-{m:02d}" for y in (2024, 2025) for m in range(1, 13) if (y, m) <= (2025, 10)]
+APACHE_SHA256: dict[str, str] = {}  # month -> sha256, filled in after the first download
+SOURCES += [
+    {"label": "ham", "corpus": "apache", "name": f"users_tomcat_{month}.mbox", "url": APACHE + month, "size": None, "sha256": APACHE_SHA256.get(month)}
+    for month in APACHE_MONTHS
+]  # fmt: skip
+
 MAX_BYTES = 50_000_000  # refuse anything far larger than expected
+MAX_TOTAL_BYTES = 150_000_000  # and stop if everything together grows far beyond the estimate
 CHUNK = 1 << 16
 
 
@@ -61,7 +73,7 @@ def fetch(source: dict, dest: Path) -> dict:
 
     size = target.stat().st_size
     digest = sha256_of(target)
-    if size != source["size"]:
+    if source["size"] is not None and size != source["size"]:
         raise SystemExit(f"{source['name']}: {size} bytes, expected {source['size']} - the source changed")
     if source["sha256"] and digest != source["sha256"]:
         raise SystemExit(f"{source['name']}: SHA-256 {digest} doesn't match the pinned {source['sha256']}")
@@ -81,7 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dest", type=Path, required=True, help="where to store the files (the Docker volume)")
     args = parser.parse_args(argv)
 
-    files = [fetch(source, args.dest) for source in SOURCES]
+    files = []
+    for source in SOURCES:
+        files.append(fetch(source, args.dest))
+        if sum(f["size"] for f in files) > MAX_TOTAL_BYTES:
+            raise SystemExit(f"more than {MAX_TOTAL_BYTES} bytes in total, stopped")
     manifest = {"fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "files": files}
     (args.dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     for f in files:
