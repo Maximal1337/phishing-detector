@@ -17,9 +17,17 @@ VERDICT_LABELS = {
 }
 
 
+HISTORY_WARNING = "Warning: the scan history is unavailable, so earlier flags on this sender could not be checked."
+
+
 def format_result(result: Result) -> str:
-    lines = [f"Verdict: {VERDICT_LABELS[result.verdict]} (score {result.score}/100)"]
+    verdict = f"Verdict: {VERDICT_LABELS[result.verdict]} (score {result.score}/100"
+    if result.raised_from:
+        verdict += f", raised from {VERDICT_LABELS[result.raised_from]}: {result.raise_reason}"
+    lines = [verdict + ")"]
     lines.append("Input: " + ("email with headers" if result.input_type == "email" else "body text only (no headers)"))
+    if result.history_status == "unavailable":
+        lines.append(HISTORY_WARNING)
     if result.indicators:
         lines.append(f"Indicators ({len(result.indicators)}):")
         for indicator in result.indicators:

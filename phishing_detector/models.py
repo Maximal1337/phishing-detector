@@ -67,6 +67,9 @@ class Result:
     notes: list[str]
     sender_domain: str | None
     email_sha256: str
+    history_status: str = "skipped"  # "ok", "unavailable" (store failed) or "skipped" (not run)
+    raised_from: str | None = None  # verdict before a precautionary raise, if there was one
+    raise_reason: str | None = None  # why the verdict was raised, e.g. "history unavailable"
 
     def signals(self) -> list[dict]:
         """Indicator ids and weights only: what the scan history stores."""

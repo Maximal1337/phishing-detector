@@ -85,3 +85,31 @@ def test_body_only_input_skips_history():
     assert result.input_type == "body_only"
     assert not _flagged(result)
     assert NO_HISTORY_NOTE not in result.notes
+
+
+class _Broken:
+    def count_trusted_flags(self, sender_domain, exclude_sha256):
+        raise ConnectionError("database unavailable")
+
+
+def test_history_status():
+    assert analyze(_mail("examplebank.test", "pass", NORMAL_TEXT), history=InMemoryHistory()).history_status == "ok"
+    assert analyze(_mail("examplebank.test", "pass", NORMAL_TEXT), history=_Broken()).history_status == "unavailable"
+    assert analyze(_mail("examplebank.test", "pass", NORMAL_TEXT)).history_status == "skipped"  # no store
+    assert analyze(NORMAL_TEXT.encode(), history=_Broken()).history_status == "skipped"  # body only
+
+
+def test_unavailable_history_raises_the_verdict_when_a_flag_could_have_changed_it():
+    # Score 10 (urgency only): a history flag (+20) would make it suspicious.
+    raw = _mail("examplebank.test", "pass", "Hello,\nplease reply urgently about the meeting room.\n")
+    assert analyze(raw, history=InMemoryHistory()).verdict == "likely_legitimate"
+    result = analyze(raw, history=_Broken())
+    assert (result.score, result.verdict) == (10, "suspicious")
+    assert (result.raised_from, result.raise_reason) == ("likely_legitimate", "history unavailable")
+
+
+def test_unavailable_history_keeps_the_verdict_when_a_flag_could_not_change_it():
+    calm = analyze(_mail("examplebank.test", "pass", NORMAL_TEXT), history=_Broken())  # 0 + 20 < 25
+    assert (calm.verdict, calm.raised_from) == ("likely_legitimate", None)
+    already = analyze(_mail("examplebank.test", "fail", PHISHING_TEXT), history=_Broken())
+    assert (already.verdict, already.raised_from) == ("phishing", None)

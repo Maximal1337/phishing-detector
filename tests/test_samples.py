@@ -77,3 +77,29 @@ def test_spoofed_sample_does_not_poison_the_real_bank():
     assert receipt.sender_domain == "examplebank.test"
     assert receipt.verdict == "likely_legitimate"
     assert "history.domain_flagged" not in {i.id for i in receipt.indicators}
+
+
+_RANK = {"likely_legitimate": 0, "suspicious": 1, "phishing": 2}
+
+
+class _NoFlags:
+    def count_trusted_flags(self, sender_domain, exclude_sha256):
+        return 0
+
+
+class _AlwaysFlagged:
+    def count_trusted_flags(self, sender_domain, exclude_sha256):
+        return 1
+
+
+class _Unavailable:
+    def count_trusted_flags(self, sender_domain, exclude_sha256):
+        raise ConnectionError("database unavailable")
+
+
+@pytest.mark.parametrize("name", EXPECTED)
+def test_unavailable_history_never_gives_a_milder_verdict(name):
+    """Property: with the history down, no sample gets a lower verdict than with it up, flagged or not."""
+    down = _RANK[_scan(name, history=_Unavailable()).verdict]
+    assert down >= _RANK[_scan(name, history=_NoFlags()).verdict]
+    assert down >= _RANK[_scan(name, history=_AlwaysFlagged()).verdict]

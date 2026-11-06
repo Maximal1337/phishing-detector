@@ -65,7 +65,8 @@ SUSPICIOUS_AT = 25
 
 BODY_ONLY_NOTE = "Body text only (no email headers): authentication, sender and history checks were skipped."
 NO_HISTORY_NOTE = "History check skipped: no scan history was provided."
-HISTORY_UNAVAILABLE_NOTE = "History check skipped: the scan history is unavailable right now."
+HISTORY_UNAVAILABLE_NOTE = "The scan history is unavailable: earlier flags on this sender could not be checked."
+HISTORY_UNAVAILABLE_REASON = "history unavailable"
 
 Check = Callable[[ParsedEmail, list[str]], list[Finding]]
 
@@ -103,6 +104,16 @@ def score_of(indicators: list[Indicator]) -> int:
     return min(MAX_SCORE, sum(i.weight for i in indicators))
 
 
+def cautious_verdict(score: int) -> str:
+    """The verdict if the unavailable history had flagged the sender domain.
+
+    When the history can't be read, the scan still completes (fail-open), but
+    the verdict is raised wherever the missing flag could have changed it. An
+    outage can then add extra "suspicious" results, never a new miss.
+    """
+    return verdict_for(min(MAX_SCORE, score + WEIGHTS["history.domain_flagged"]))
+
+
 def analyze(raw: bytes, history: HistoryStore | None = None) -> Result:
     """Scan one email. `history` is the scan-history store; without it the history check is skipped."""
     parsed = parse(raw)
@@ -117,23 +128,34 @@ def analyze(raw: bytes, history: HistoryStore | None = None) -> Result:
     for check in CONTENT_CHECKS:
         findings.extend(check(parsed, notes))
 
+    history_status = "skipped"
     if parsed.input_type == "email" and parsed.from_domain:
         if history is None:
             notes.append(NO_HISTORY_NOTE)
         else:
             try:
                 findings.extend(history_check.check(parsed.from_domain, parsed.sha256, history))
+                history_status = "ok"
             except Exception:  # a failing store (e.g. database down) must not stop the scan
+                history_status = "unavailable"
                 notes.append(HISTORY_UNAVAILABLE_NOTE)
 
     indicators = to_indicators(findings)
     score = score_of(indicators)
+    verdict = verdict_for(score)
+    raised_from = raise_reason = None
+    if history_status == "unavailable" and cautious_verdict(score) != verdict:
+        raised_from, verdict, raise_reason = verdict, cautious_verdict(score), HISTORY_UNAVAILABLE_REASON
+
     return Result(
         input_type=parsed.input_type,
-        verdict=verdict_for(score),
+        verdict=verdict,
         score=score,
         indicators=indicators,
         notes=notes,
         sender_domain=parsed.from_domain or None,
         email_sha256=parsed.sha256,
+        history_status=history_status,
+        raised_from=raised_from,
+        raise_reason=raise_reason,
     )

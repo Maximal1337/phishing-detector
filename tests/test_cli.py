@@ -53,7 +53,23 @@ def test_scan_json(tmp_path, capsys):
     assert main(["scan", str(sample), "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["verdict"] == "likely_legitimate"
-    assert set(data) == {"input_type", "verdict", "score", "indicators", "notes", "sender_domain", "email_sha256"}
+    assert set(data) == {
+        "input_type", "verdict", "score", "indicators", "notes", "sender_domain", "email_sha256",
+        "history_status", "raised_from", "raise_reason",
+    }  # fmt: skip
+    assert data["history_status"] == "skipped"
+
+
+def test_unavailable_history_shows_a_warning_and_the_raise():
+    raised = _result(verdict="suspicious", score=10, indicators=[], notes=[], history_status="unavailable",
+                     raised_from="likely_legitimate", raise_reason="history unavailable")  # fmt: skip
+    lines = format_result(raised).splitlines()
+    assert lines[0] == "Verdict: SUSPICIOUS (score 10/100, raised from LIKELY LEGITIMATE: history unavailable)"
+    assert lines[2].startswith("Warning: the scan history is unavailable")
+    not_raised = format_result(_result(history_status="unavailable")).splitlines()
+    assert not_raised[0] == "Verdict: PHISHING (score 65/100)"
+    assert not_raised[2].startswith("Warning:")
+    assert not any(line.startswith("Warning:") for line in format_result(_result()).splitlines())
 
 
 def test_missing_file_is_an_error(tmp_path, capsys):

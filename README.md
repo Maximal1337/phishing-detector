@@ -38,6 +38,15 @@ never full email addresses or the subject.
 passed DMARC for the domain or the domain was itself a lookalike. Otherwise anyone could put a bank's address
 in the From line of a phishing mail and make the bank's real mail look suspicious afterwards.
 
+**When the history is unavailable** (for example the database is down), the scan still runs (fail-open),
+but carefully: the result says `history_status: unavailable`, the CLI and the UI show a warning, and if an earlier
+flag on the sender domain (+20) could have pushed the score over the next threshold, the verdict is raised one level
+with the reason `history unavailable`. The score itself still counts only what is in the email.
+An outage can therefore produce extra `suspicious` results, but never a phishing mail rated lower than with the history up;
+a test checks this for every sample. Failing closed (refusing to scan, or rating everything phishing)
+would turn a database outage into an outage of the whole service, and failing open without the raise
+would quietly miss mail that the history would have caught.
+
 Example:
 
 ```text
