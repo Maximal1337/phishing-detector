@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Build the app image for linux/amd64 and push it to the project's ECR repository.
+# Build the app image for linux/amd64, push it to the project's ECR repository,
+# wait for the ECR vulnerability scan and print the image digest to deploy.
 #
 #   AWS_PROFILE=<profile> AWS_REGION=eu-north-1 scripts/build_push.sh
 #
-# The tag is the current commit (12 characters), so a tag always names exactly
-# one version of the code; ECR tags are immutable. Prints the tag at the end:
-# put it into terraform/app/terraform.tfvars as image_tag.
+# The tag is the current commit (12 characters) and is for people; ECR tags are
+# immutable. Deployments use the digest, so EC2 runs exactly the scanned image:
+# put both into terraform/app/terraform.tfvars (image_tag, image_digest).
+# Fails if the scan doesn't complete or finds anything CRITICAL.
 set -euo pipefail
 
 : "${AWS_PROFILE:?set AWS_PROFILE}"
 : "${AWS_REGION:?set AWS_REGION}"
 cd "$(dirname "$0")/.."
+aws_ecr() { aws ecr "$@" --profile "$AWS_PROFILE" --region "$AWS_REGION"; }
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "The working tree has uncommitted changes; commit first so the tag matches the code." >&2
@@ -19,13 +22,34 @@ fi
 tag=$(git rev-parse --short=12 HEAD)
 
 repo_name=$(cd terraform/foundation && terraform output -raw ecr_repository_name)
-repo_uri=$(aws ecr describe-repositories --profile "$AWS_PROFILE" --region "$AWS_REGION" \
-  --repository-names "$repo_name" --query 'repositories[0].repositoryUri' --output text)
+repo_uri=$(aws_ecr describe-repositories --repository-names "$repo_name" --query 'repositories[0].repositoryUri' --output text)
 registry=${repo_uri%%/*}
 
-docker build --platform linux/amd64 --build-arg APP_VERSION="$tag" -t "$repo_uri:$tag" .
-aws ecr get-login-password --profile "$AWS_PROFILE" --region "$AWS_REGION" |
-  docker login --username AWS --password-stdin "$registry"
+# One plain image manifest: no provenance or SBOM attestations, which would turn the
+# push into an image index whose scan result sits on an untagged child (README, "Security").
+docker build --platform linux/amd64 --provenance=false --sbom=false --build-arg APP_VERSION="$tag" -t "$repo_uri:$tag" .
+aws_ecr get-login-password | docker login --username AWS --password-stdin "$registry"
 docker push "$repo_uri:$tag"
 
-echo "pushed tag: $tag"
+digest=$(aws_ecr describe-images --repository-name "$repo_name" --image-ids imageTag="$tag" --query 'imageDetails[0].imageDigest' --output text)
+media=$(aws_ecr describe-images --repository-name "$repo_name" --image-ids imageTag="$tag" --query 'imageDetails[0].imageManifestMediaType' --output text)
+case "$media" in
+  *index* | *manifest.list*) echo "Pushed an image index ($media), not a single manifest" >&2; exit 1 ;;
+esac
+
+echo "waiting for the ECR scan of $digest ..."
+aws_ecr wait image-scan-complete --repository-name "$repo_name" --image-id imageDigest="$digest"
+status=$(aws_ecr describe-image-scan-findings --repository-name "$repo_name" --image-id imageDigest="$digest" --query 'imageScanStatus.status' --output text)
+counts=$(aws_ecr describe-image-scan-findings --repository-name "$repo_name" --image-id imageDigest="$digest" --query 'imageScanFindings.findingSeverityCounts' --output json)
+echo "scan $status: $counts"
+if [ "$status" != "COMPLETE" ]; then
+  echo "The scan did not complete." >&2
+  exit 1
+fi
+if echo "$counts" | grep -q '"CRITICAL"'; then
+  echo "CRITICAL findings: not deploying this image." >&2
+  exit 1
+fi
+
+echo "image_tag    = \"$tag\""
+echo "image_digest = \"$digest\""

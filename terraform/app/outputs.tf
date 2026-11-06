@@ -26,7 +26,7 @@ output "app_log_group" {
   value       = aws_cloudwatch_log_group.app.name
 }
 
-output "image_tag" {
-  description = "Image tag the instances run."
-  value       = var.image_tag
+output "image" {
+  description = "Image the instances run (by digest) and its tag."
+  value       = "${local.image} (tag ${var.image_tag})"
 }

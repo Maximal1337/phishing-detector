@@ -29,11 +29,20 @@ variable "log_retention_days" {
 }
 
 variable "image_tag" {
-  description = "Tag of the app image in ECR (the git SHA printed by scripts/build_push.sh)."
+  description = "Tag of the app image in ECR (the git SHA printed by scripts/build_push.sh); shown as the app version."
   type        = string
   validation {
     condition     = can(regex("^[0-9a-f]{12}$", var.image_tag))
     error_message = "Use the 12-character git SHA that scripts/build_push.sh pushed."
+  }
+}
+
+variable "image_digest" {
+  description = "Digest of that image (sha256:..., printed by scripts/build_push.sh); the instances pull by digest."
+  type        = string
+  validation {
+    condition     = can(regex("^sha256:[0-9a-f]{64}$", var.image_digest))
+    error_message = "Use the sha256:... digest that scripts/build_push.sh printed."
   }
 }
 

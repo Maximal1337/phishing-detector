@@ -4,8 +4,9 @@
 aws_profile         = "<your-aws-cli-profile>"
 allowed_account_ids = ["<your-12-digit-account-id>"]
 
-# Printed by scripts/build_push.sh (git SHA, 12 characters).
-image_tag = "<image-tag>"
+# Both printed by scripts/build_push.sh: the tag (git SHA) and the digest the instances pull.
+image_tag    = "<image-tag>"
+image_digest = "sha256:<image-digest>"
 
 # Optional overrides (defaults shown):
 # region                = "eu-north-1"

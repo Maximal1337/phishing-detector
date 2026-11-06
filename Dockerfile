@@ -1,6 +1,6 @@
-# The web app image. Base pinned by digest: the newest python:3.13 slim build that was
-# at least 7 days old when chosen (README, "Security"); stage 7's ECR scan may move it.
-FROM python:3.13.17-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+# The web app image. Base pinned by digest. 3.13.18-slim was a day old when chosen: the
+# 7-day rule gives way when a newer base fixes HIGH or CRITICAL scan findings (README, "Security").
+FROM python:3.13.18-slim@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

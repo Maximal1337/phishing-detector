@@ -23,7 +23,8 @@ resource "aws_cloudwatch_log_group" "cloud_init" {
 }
 
 locals {
-  image = "${local.foundation.ecr_repository_url}:${var.image_tag}"
+  # By digest: the instances run exactly the image that build_push.sh saw pass the scan.
+  image = "${local.foundation.ecr_repository_url}@${var.image_digest}"
 
   # Environment of the app container; no secret values, only where to find them.
   app_env = {
