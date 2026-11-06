@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phishing detector</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Phishing detector</h1>
+    <p class="hint">Upload a raw email (.eml) or paste its source. Nothing is opened, fetched or run: links and attachments are only read as text.</p>
+
+    <form id="scan-form">
+      <label>Email file <input type="file" name="email" accept=".eml,.txt,message/rfc822"></label>
+      <label>or paste the email source
+        <textarea name="text" rows="10" spellcheck="false"></textarea>
+      </label>
+      <button type="submit">Scan</button>
+      <span id="status" role="status"></span>
+    </form>
+
+    <section id="result" hidden>
+      <h2>Result <span id="verdict" class="badge"></span></h2>
+      <p>Score <strong id="score"></strong> of 100 <span id="cached" class="muted"></span></p>
+      <p id="warning" class="warning" hidden></p>
+      <table>
+        <thead><tr><th>Indicator</th><th>Weight</th><th>Why</th><th>Evidence (defanged)</th></tr></thead>
+        <tbody id="indicators"></tbody>
+      </table>
+      <ul id="notes" class="muted"></ul>
+    </section>
+
+    <section>
+      <h2>History of scans</h2>
+      <table>
+        <thead><tr><th>Time (UTC)</th><th>Sender domain</th><th>Verdict</th><th>Score</th><th>Signals</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

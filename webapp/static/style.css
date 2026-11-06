@@ -1,0 +1,14 @@
+body { font-family: system-ui, sans-serif; margin: 0; color: #1d1d1f; background: #fafafa; }
+main { max-width: 64rem; margin: 0 auto; padding: 1rem; }
+label { display: block; margin: 0.5rem 0; }
+textarea { width: 100%; font-family: ui-monospace, monospace; }
+button { padding: 0.4rem 1.2rem; }
+table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; font-size: 0.9rem; }
+th, td { border-bottom: 1px solid #ddd; padding: 0.3rem 0.5rem; text-align: left; vertical-align: top; }
+.evidence { font-family: ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+.muted, .hint { color: #666; }
+.badge { padding: 0.1rem 0.6rem; border-radius: 0.8rem; color: #fff; font-size: 1rem; }
+.badge.phishing, .verdict-phishing { background: #b3261e; color: #fff; }
+.badge.suspicious, .verdict-suspicious { background: #b26a00; color: #fff; }
+.badge.likely_legitimate, .verdict-likely_legitimate { background: #2e7d32; color: #fff; }
+.warning { background: #fff4e5; border-left: 4px solid #b26a00; padding: 0.5rem; }
