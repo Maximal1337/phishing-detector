@@ -215,11 +215,13 @@ _How ambiguous points in the assignment were interpreted._
 _What the detector and the infrastructure do not cover._
 
 - The detector is rule-based: a well-written phishing email with no technical tells (clean domain, no links or attachments,
-  neutral wording) scores low. On public data it catches about 22 % of phishing at the phishing level and 43 % at
-  "suspicious", with under 1 % false positives (see Evaluation); most misses link to domains no rule flags.
+  neutral wording) scores low. On public data, without the era-biased signals, it catches about 21 % of phishing at the
+  phishing level and 56 % at "suspicious", flagging 1-1.5 % of legitimate mail as suspicious (see Evaluation).
 - Some weights are tuned on public corpora whose legitimate mail is from 2002 and mostly personal or mailing-list mail;
-  modern transactional mail ("Dear customer", payment updates, password resets) is underrepresented,
-  so the wording weights are probably too high for it. The others are set by hand.
+  the modern legitimate set is a technical mailing list. Modern transactional mail ("Dear customer", payment updates,
+  password resets, HTML buttons) is underrepresented in both, so expect more false positives on it. The others are set by hand.
+- Links wrapped by a mail gateway's link protection (Microsoft Safe Links, Proofpoint, Mimecast) are not unwrapped:
+  the redirect and recipient-address signals skip them, so the real target is not checked.
 - Without the full Public Suffix List, the registrable domain is "the last two labels", plus a short list of
   two-label suffixes such as `co.uk` and `co.il`.
 - Lookalike detection only protects the brands listed in `phishing_detector/data/brands.txt`; the TLD and shortener lists are hand-picked.
@@ -250,22 +252,37 @@ _Source and license of every data set used for testing and evaluation._
 - Legitimate mail for the evaluation: [SpamAssassin public corpus](https://spamassassin.apache.org/old/publiccorpus/),
   `20030228_easy_ham`, `easy_ham_2` and `hard_ham` (4150 messages, 2002-2003); no formal license,
   "Copyright for the text in the messages remains with the original senders".
-- Neither corpus is in this repository: `scripts/fetch_datasets.py` downloads them into a Docker volume and checks pinned SHA-256 values.
+- Modern legitimate mail for the evaluation: the public [users@tomcat.apache.org archive](https://lists.apache.org/list.html?users@tomcat.apache.org),
+  22 monthly mbox files, 2024-01 to 2025-10 (2843 messages); public under the
+  [Apache public forum archive policy](https://www.apache.org/foundation/public-archives.html), no reuse license,
+  copyright stays with the senders.
+- There is no public corpus of modern personal and transactional mail with full headers, so two proxies are used,
+  each with its own bias: ham-2002 is old (no Authentication-Results, little HTML), ham-2024 is modern but a technical
+  mailing list (plain-text questions and answers, hardly any marketing or transactional mail). Weights are tuned on
+  ham-2002 only; ham-2024 is reported separately.
+- None of the corpora is in this repository: `scripts/fetch_datasets.py` downloads them into a Docker volume and checks pinned SHA-256 values.
+  The Apache archive builds each mbox on request, so a later download can differ in bytes (for example if a message was
+  removed from the archive); the script then prints the mismatch and both message counts and keeps going, and the
+  numbers may differ slightly from the ones below.
   Only aggregate results are published ([docs/evaluation.md](docs/evaluation.md)).
 
 ## Evaluation
 
 The detector was measured on the public corpora above; full results and method in [docs/evaluation.md](docs/evaluation.md).
-On the held-out test split (379 phishing, 1250 legitimate), without the signals that only tell the corpora's eras apart:
+On the held-out test split (379 phishing, 1250 ham-2002, 868 ham-2024), without the signals that only tell the corpora's
+eras apart (second test run, after a recall iteration on dev; the first run is in the evaluation document too):
 
-| Flagged at | Precision | Recall | False-positive rate |
-|---|---|---|---|
-| phishing (score ≥ 50) | 0.976 | 0.219 | 0.2 % |
-| suspicious or worse (score ≥ 25) | 0.942 | 0.430 | 0.8 % |
+| Flagged at | Precision | Recall | False positives, ham-2002 | False positives, ham-2024 |
+|---|---|---|---|---|
+| phishing (score ≥ 50) | 0.987 | 0.206 | 0.1 % | 0.0 % |
+| suspicious or worse (score ≥ 25) | 0.918 | 0.559 | 1.5 % | 1.0 % |
 
-When it says phishing it is nearly always right, but it misses many modern phishing mails that link to unremarkable
-domains without tell-tale wording. The legitimate mail is from 2002 and the phishing from 2023-2025, so signals that
-depend on the era (all `auth.*`, punycode, new TLDs, URL shorteners) were left out of the tuning and of the headline numbers.
+With all signals counted, recall is 0.404 at ≥ 50 and 0.760 at ≥ 25 (false positives 1.6 % and 1.4 % at ≥ 25).
+
+When it says phishing it is nearly always right; "suspicious" catches more than half.
+The tuning ham is from 2002 and the phishing from 2023-2025, so signals that depend on the era (all `auth.*`, punycode,
+new TLDs, URL shorteners, free hosting, redirects, buttons, HTML tricks) were left out of the tuning and of the headline
+numbers and keep small hand-set weights. On modern legitimate mail (ham-2024) none of the `auth.*` failures fired.
 The weights marked `tuned` in [`scoring.py`](phishing_detector/scoring.py) come from a one-parameter rule on the dev split
 (weight = k x ln of how much more often a signal fires in phishing), explained in the evaluation document.
 
@@ -276,7 +293,7 @@ the repository is mounted read-only; only the download step has network access):
 docker volume create phishdet-corpora
 IMAGE=python:3.13.17-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
 
-# 1. Download and verify the six files (network on).
+# 1. Download and verify the 28 files, about 82 MB (network on).
 docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
   -v "$(pwd):/src:ro" -v phishdet-corpora:/data \
   $IMAGE python -I -B /src/scripts/fetch_datasets.py --dest /data
@@ -298,6 +315,7 @@ _What would come next with more time._
   - URL reputation for links that no rule flags ([Google Safe Browsing](https://developers.google.com/safe-browsing),
     [URLhaus](https://urlhaus.abuse.ch/)), sending only the URL, never the email;
   - domain age from [RDAP](https://about.rdap.org/): phishing domains are often days old;
+  - unwrap link-protection redirects (Safe Links, Proofpoint, Mimecast) and check the real target;
   - machine learning on modern labelled data (phishing and legitimate mail of the same era, with headers),
     starting with logistic regression over these same rules so each rule keeps one readable weight.
 
