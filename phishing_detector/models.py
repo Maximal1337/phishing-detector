@@ -39,6 +39,7 @@ class ParsedEmail:
     password_inputs: int = 0  # <input type="password"> elements in HTML parts
     attachments: list[Attachment] = field(default_factory=list)
     to_addresses: list[str] = field(default_factory=list)  # To, Cc, Delivered-To, X-Original-To (lower case)
+    list_unsubscribe: list[str] = field(default_factory=list)  # http(s) URLs in the List-Unsubscribe header
     has_html: bool = False
     image_count: int = 0  # <img> elements in HTML parts
     hidden_text_chars: int = 0  # text inside elements hidden with CSS (display:none, font-size:0, ...)

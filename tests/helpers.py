@@ -19,6 +19,7 @@ def make_email(
     text: str | None = "Hello,\nplease find the notes below.\n",
     html: str | None = None,
     attachments: list[tuple[str, str, bytes]] = (),
+    list_unsubscribe: str | None = None,
 ) -> bytes:
     msg = EmailMessage()
     for value in auth or []:
@@ -32,6 +33,8 @@ def make_email(
     msg["Subject"] = subject
     msg["Date"] = "Thu, 05 Nov 2026 10:00:00 +0000"
     msg["Message-ID"] = "<test@example.com>"
+    if list_unsubscribe:
+        msg["List-Unsubscribe"] = list_unsubscribe
     if text is not None:
         msg.set_content(text)
     if html is not None:

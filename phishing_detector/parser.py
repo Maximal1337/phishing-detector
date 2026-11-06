@@ -54,6 +54,7 @@ def parse(raw: bytes) -> ParsedEmail:
         auth_results=_topmost(msg, "Authentication-Results"),
         subject=_header(msg, "Subject"),
         to_addresses=sorted({a.lower() for name in _RECIPIENT_HEADERS for _, a in _addresses(msg, name)}),
+        list_unsubscribe=re.findall(r"<(https?://[^>\s]+)>", _header(msg, "List-Unsubscribe")),
     )
 
     texts: list[str] = []
