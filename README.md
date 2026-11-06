@@ -103,6 +103,9 @@ python -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
+These commands were run on Linux (a `python:3.13.17-slim` container) and on Windows; CI runs them on
+`ubuntu-latest` for every push. On macOS, use the Linux commands.
+
 ## Deploy to AWS
 
 _Prerequisites and tool versions, the two Terraform stacks and the order to apply them, setting the access secret, building and pushing the image._
