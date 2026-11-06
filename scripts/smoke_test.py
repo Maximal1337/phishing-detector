@@ -1,6 +1,10 @@
 """Smoke test of a deployed stack, through CloudFront.
 
     AWS_PROFILE=<profile> python scripts/smoke_test.py https://<distribution>.cloudfront.net
+    AWS_PROFILE=<profile> python scripts/smoke_test.py https://<distribution>.cloudfront.net --watch 900
+
+--watch SECONDS keeps scanning one sample every 2 seconds during a rollout and reports every
+non-200 answer and every change of the version that answers (/api/version).
 
 Reads the Basic-auth credentials from Secrets Manager inside this process (boto3) and
 never prints or logs them. Prints one line per check and exits 1 if any check fails.
@@ -13,6 +17,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -63,12 +68,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("url", help="https://<distribution>.cloudfront.net")
     parser.add_argument("--secret-id", default="phishdet/basic-auth", help="Secrets Manager name of the Basic-auth secret")
     parser.add_argument("--region", default="eu-north-1")
+    parser.add_argument("--watch", type=int, metavar="SECONDS", help="watch a rollout instead of the one-off checks")
     args = parser.parse_args(argv)
     base = args.url.rstrip("/")
     auth, wrong = basic_auth(args.secret_id, args.region)
+    if args.watch:
+        return watch(base, auth, args.watch)
 
     status, body = request(f"{base}/healthz")
-    check("/healthz without auth -> 200", status == 200, body.decode(errors="replace")[:120])
+    check("/healthz without auth -> 200, nothing but the status", status == 200 and json.loads(body) == {"status": "ok"})
+    status, _ = request(f"{base}/api/version")
+    check("/api/version without auth -> 401", status == 401, str(status))
+    status, body = request(f"{base}/api/version", auth=auth)
+    check("/api/version with the password -> 200", status == 200, body.decode(errors="replace")[:120])
     status, _ = request(f"{base}/")
     check("/ without auth -> 401", status == 401, str(status))
     status, _ = request(f"{base}/", auth=wrong)
@@ -96,6 +108,32 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"{failures} failed")
     return 1 if failures else 0
+
+
+def watch(base: str, auth: str, seconds: int) -> int:
+    sample = SAMPLES / "phishing_spoofed_bank.eml"
+    started, end = time.time(), time.time() + seconds
+    requests = errors = 0
+    versions: dict[str, int] = {}
+    last = None
+    while time.time() < end:
+        status, body = request(f"{base}/api/version", auth)
+        version = json.loads(body).get("version") if status == 200 else None
+        scan_status, _ = request(f"{base}/api/scan", auth, *multipart(sample.name, sample.read_bytes()))
+        requests += 2
+        stamp = f"{time.time() - started:6.0f}s"
+        for what, code in (("version", status), ("scan", scan_status)):
+            if code != 200:
+                errors += 1
+                print(f"{stamp}  {what} -> {code}")
+        if version:
+            versions[version] = versions.get(version, 0) + 1
+            if version != last:
+                print(f"{stamp}  answering: {version}")
+                last = version
+        time.sleep(2)
+    print(f"{requests} requests, {errors} not 200; answers per version: {versions}")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

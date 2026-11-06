@@ -113,7 +113,7 @@ email says "from cache"; every scan appears under "History of scans". Stop with 
 (`down -v` also deletes the local database). Without `DB_HOST` the app keeps its history in memory instead.
 
 API: `POST /api/scan` (multipart field `email`, or form field `text`) returns the result as JSON plus `cached`;
-`GET /api/history?limit=20`; `GET /healthz` (no auth).
+`GET /api/history?limit=20`; `GET /api/version` (image tag and rules version); `GET /healthz` (no auth, only `{"status": "ok"}`).
 
 ```bash
 curl -s -F "email=@samples/phishing_spoofed_bank.eml" http://127.0.0.1:8000/api/scan
@@ -307,12 +307,19 @@ _What the detector and the infrastructure do not cover._
 - Some weights are tuned on public corpora whose legitimate mail is from 2002 and mostly personal or mailing-list mail;
   the modern legitimate set is a technical mailing list. Modern transactional mail ("Dear customer", payment updates,
   password resets, HTML buttons) is underrepresented in both, so expect more false positives on it. The others are set by hand.
-- The Valkey cache saves little. It keeps only the email's own analysis, keyed by the detector's rules version and the
-  email's SHA-256 (the history check and the score run on every request). Measured in the container: the analysis takes
-  3 ms at the median and 14 ms at the 95th percentile on corpus mail (15 synthetic samples: 1.7 / 4.3 ms), while a cache
-  read in compose takes 0.07 ms. And byte-identical repeats are rare: the mails of one campaign differ in recipient,
-  links and tracking ids, so each has its own SHA-256. The cache is there as the ElastiCache part of the assignment and
-  as the pattern a slower detector (URL reputation, a model) would need.
+- Valkey holds two small caches, both keyed by the detector's rules version, so a new version never reuses an old entry:
+  - **The email's own analysis** (`static:<rules version>:<sha256>`, 1 hour): saves little. Measured in the container, the
+    analysis takes 3 ms at the median and 14 ms at the 95th percentile on corpus mail (15 synthetic samples: 1.7 / 4.3 ms);
+    a cache read in compose takes 0.07 ms. Byte-identical repeats are rare too: the mails of one campaign differ in
+    recipient, links and tracking ids, so each has its own SHA-256. It is the pattern a slower detector (URL reputation,
+    a model) would need.
+  - **Domain reputation** (`flag:<rules version>:<domain>`, 7 days): the SHA-256s of up to five emails that flagged a
+    sender domain under the poisoning rule, written only after the scan row is committed to PostgreSQL. This one serves
+    campaigns (many different mails from one flagged domain) and resilience: while the database is down, a known-bad
+    domain still gets the history signal instead of only a cautious verdict. Only "flagged" is cached, never "not
+    flagged": a new flag has to count on every instance at once, and a miss costs one indexed count in PostgreSQL, after
+    which a found flag restores the mark. A test runs the same sequence of scans with and without Valkey and expects the
+    same verdicts.
 - Links wrapped by a mail gateway's link protection are unwrapped statically (Microsoft Safe Links: the `url` parameter;
   Proofpoint URL Defense v2 and v3: their own encoding) and every link check runs on the real target. Mimecast-protected
   links carry the target in an opaque token and can't be unwrapped offline; they are judged as links to Mimecast.

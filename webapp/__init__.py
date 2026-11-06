@@ -28,7 +28,7 @@ from phishing_detector.scoring import analyze_static, finish
 from phishing_detector.version import rules_version as current_rules_version
 
 from . import credentials
-from .storage import MemoryHistory, NoCache, PostgresHistory, ValkeyCache, scan_row
+from .storage import STATIC_TTL_SECONDS, MemoryHistory, NoCache, PostgresHistory, ReputationHistory, ValkeyCache, scan_row
 
 MAX_UPLOAD_BYTES = 1024 * 1024  # 1 MB; larger requests get 413
 MAX_HISTORY = 100
@@ -57,6 +57,13 @@ class LoggedHistory:
         except Exception as exc:
             log_event("history_read_failed", error=type(exc).__name__, request_id=g.get("request_id"))
             raise  # analyze() turns this into history_status "unavailable" and a cautious verdict
+
+    def trusted_flag_shas(self, sender_domain: str, exclude_sha256: str, limit: int) -> list[str]:
+        try:
+            return self.store.trusted_flag_shas(sender_domain, exclude_sha256, limit)
+        except Exception as exc:
+            log_event("history_read_failed", error=type(exc).__name__, request_id=g.get("request_id"))
+            raise
 
 
 def _from_environment() -> dict:
@@ -119,6 +126,8 @@ def create_app(
     def add_headers_and_log(response):
         response.headers.update(SECURITY_HEADERS)
         response.headers["X-Request-Id"] = g.get("request_id", "")
+        if request.path == "/healthz" and response.status_code == 200:
+            return response  # the load balancer asks every 15 s per instance; only failures are worth a line
         duration = round((time.perf_counter() - g.get("started", time.perf_counter())) * 1000, 1)
         log_event("request", request_id=g.get("request_id"), method=request.method, path=request.path,
                   status=response.status_code, duration_ms=duration, **g.get("log_fields", {}))  # fmt: skip
@@ -130,7 +139,11 @@ def create_app(
 
     @app.get("/healthz")
     def healthz():
-        return jsonify(status="ok", version=version, rules_version=rules_version)
+        return jsonify(status="ok")  # no auth, so nothing about the version
+
+    @app.get("/api/version")
+    def version_info():
+        return jsonify(version=version, rules_version=rules_version)
 
     @app.get("/")
     def index():
@@ -152,24 +165,31 @@ def create_app(
         static, cached = None, False
         sha256 = hashlib.sha256(raw).hexdigest()  # the same id the detector reports
         key = f"{rules_version}:{sha256}"  # another detector version never reuses this entry
-        try:
-            if data := cache.get(key):
-                static, cached = StaticAnalysis.from_dict(data), True
-        except Exception as exc:  # the cache is an optimisation: carry on without it
+        def cache_failed(exc: Exception) -> None:  # the cache is an optimisation: carry on without it
             log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
-        if static is None:
-            static = analyze_static(raw)
-        result = finish(static, history=LoggedHistory(history)).to_dict()
-        if not cached and result["history_status"] != "unavailable":  # nothing from an outage is kept
-            try:
-                cache.set(key, static.to_dict())
-            except Exception as exc:
-                log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
 
         try:
-            history.record(scan_row(result))
+            if data := cache.get(f"static:{key}"):
+                static, cached = StaticAnalysis.from_dict(data), True
+        except Exception as exc:
+            cache_failed(exc)
+        if static is None:
+            static = analyze_static(raw)
+        reputation = ReputationHistory(LoggedHistory(history), cache, rules_version, on_cache_error=cache_failed)
+        result = finish(static, history=reputation).to_dict()
+        if not cached and result["history_status"] != "unavailable":  # nothing from an outage is kept
+            try:
+                cache.set(f"static:{key}", static.to_dict(), STATIC_TTL_SECONDS)
+            except Exception as exc:
+                cache_failed(exc)
+
+        row = scan_row(result)
+        try:
+            history.record(row)
         except Exception as exc:  # the scan result still goes back to the user (D-70)
             log_event("history_write_failed", error=type(exc).__name__, request_id=g.request_id)
+        else:
+            reputation.remember(row)  # only after the commit, so a mark never runs ahead of the database
 
         g.log_fields = {"verdict": result["verdict"], "score": result["score"], "cache_hit": cached}
         return jsonify({**result, "cached": cached})

@@ -49,6 +49,8 @@ def test_record_recent_and_the_poisoning_rule(store):
     assert store.count_trusted_flags("examplebank.test", "a" * 64) == 1  # the same email doesn't flag itself
     store.record({**row, "verdict": "suspicious", "email_sha256": "d" * 64, "signals": [{"id": "auth.dmarc_pass", "weight": 0}]})
     assert store.count_trusted_flags("examplebank.test", "b" * 64) == 2  # only phishing verdicts count
+    assert store.trusted_flag_shas("examplebank.test", "b" * 64, 5) == ["c" * 64, "a" * 64]  # newest first, trusted only
+    assert store.trusted_flag_shas("examplebank.test", "c" * 64, 5) == ["a" * 64]
 
     latest = store.recent(2)
     assert [r["verdict"] for r in latest] == ["suspicious", "phishing"]

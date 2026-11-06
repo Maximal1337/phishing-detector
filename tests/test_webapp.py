@@ -10,7 +10,7 @@ import pytest
 
 from helpers import make_email
 from webapp import STATIC, create_app
-from webapp.storage import SCANS_COLUMNS, MemoryHistory
+from webapp.storage import SCANS_COLUMNS, MemoryHistory, NoCache
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
 CREDS = ("reviewer", "correct horse")
@@ -30,8 +30,16 @@ class DictCache:
     def get(self, sha256):
         return self.items.get(sha256)
 
-    def set(self, sha256, result):
-        self.items[sha256] = json.loads(json.dumps(result))
+    def set(self, key, value, ttl):
+        self.items[key] = json.loads(json.dumps(value))
+
+
+class BrokenCache:
+    def get(self, key):
+        raise ConnectionError("cache down")
+
+    def set(self, key, value, ttl):
+        raise ConnectionError("cache down")
 
 
 class BrokenHistory(MemoryHistory):
@@ -62,8 +70,23 @@ def _scan(client, raw: bytes, **headers):
 def test_healthz_needs_no_auth_and_no_database():
     response = _client(history=BrokenHistory(fail_read=True, fail_write=True)).get("/healthz")
     assert response.status_code == 200
-    body = response.get_json()
-    assert (body["status"], body["version"]) == ("ok", "abc123") and len(body["rules_version"]) == 12
+    assert response.get_json() == {"status": "ok"}  # no version without auth
+    assert b"abc123" not in response.data
+
+
+def test_version_is_behind_auth():
+    client = _client()
+    assert client.get("/api/version").status_code == 401
+    body = client.get("/api/version", headers=AUTH).get_json()
+    assert body["version"] == "abc123" and len(body["rules_version"]) == 12
+
+
+def test_successful_health_checks_are_not_logged(capsys):
+    client = _client()
+    client.get("/healthz")
+    client.get("/", headers=AUTH)
+    paths = [json.loads(line)["path"] for line in capsys.readouterr().out.splitlines() if '"event": "request"' in line]
+    assert paths == ["/"]
 
 
 @pytest.mark.parametrize("headers", [{}, _basic("reviewer", "wrong"), _basic("other", CREDS[1]), {"Authorization": "Bearer x"}])
@@ -232,7 +255,7 @@ def test_another_detector_version_misses_the_cache():
     assert [_scan(old, raw).get_json()["cached"] for _ in range(2)] == [False, True]
     assert [_scan(new, raw).get_json()["cached"] for _ in range(2)] == [False, True]  # a rollout starts cold
     assert _scan(old, raw).get_json()["cached"] is True  # and a rollback finds its own entries
-    assert sorted(k.split(":")[0] for k in cache.items) == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
+    assert sorted(k.split(":")[1] for k in cache.items if k.startswith("static:")) == ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]
 
 
 def test_rules_version_changes_with_any_rule_file(tmp_path):
@@ -257,3 +280,97 @@ def test_no_address_in_the_api_response_or_the_cache():
     assert "links.recipient_in_url" in [i["id"] for i in body["indicators"]]
     for text in (json.dumps(body), json.dumps(cache.items)):
         assert "bob" not in text and "[address]" in text
+
+
+# --- domain reputation marks (flag:<rules version>:<domain>) ---------------
+
+SHOP = "shop.example.net"
+
+
+def _shop_mail(kind: str, n: int = 0) -> bytes:
+    """legit: a plain mail from the shop; flag: phishing that passed DMARC for it (a trusted flag); forged: phishing without proof."""
+    if kind == "legit":
+        return make_email(from_=f"Shop <news{n}@{SHOP}>", subject=f"Order {n}", text=f"Hello, order {n} has shipped.\n")
+    auth = [f"mx.example.org; spf=pass; dmarc=pass header.from={SHOP}"] if kind == "flag" else None
+    text = f"Dear customer, verify your account within 24 hours or it will be suspended: http://192.0.2.{10 + n}/login\n"
+    return make_email(from_=f"Shop <billing{n}@{SHOP}>", auth=auth, text=text)
+
+
+def _flagged(body):
+    return "history.domain_flagged" in [i["id"] for i in body["indicators"]]
+
+
+def test_a_mark_is_written_after_the_commit_and_seen_by_another_instance():
+    history, cache = MemoryHistory(), DictCache()
+    first, second = _client(history=history, cache=cache), _client(history=history, cache=cache)
+    assert not _flagged(_scan(first, _shop_mail("legit")).get_json())
+    assert not [k for k in cache.items if k.startswith("flag:")]  # "not flagged" is never cached
+    _scan(first, _shop_mail("flag"))
+    assert [k for k in cache.items if k.startswith("flag:")] == [f"flag:{_rules_version(first)}:{SHOP}"]
+    assert _flagged(_scan(second, _shop_mail("legit", 1)).get_json())
+
+
+def test_forged_phishing_writes_no_mark():
+    cache = DictCache()
+    client = _client(cache=cache)
+    assert _scan(client, _shop_mail("forged")).get_json()["verdict"] == "phishing"
+    assert not [k for k in cache.items if k.startswith("flag:")]
+    assert not _flagged(_scan(client, _shop_mail("legit")).get_json())
+
+
+def test_database_down_with_a_mark_still_flags_without_a_raise():
+    cache = DictCache()
+    _scan(_client(cache=cache), _shop_mail("flag"))  # instance 1 writes the mark
+    broken = BrokenHistory(fail_read=True, fail_write=True)
+    body = _scan(_client(history=broken, cache=cache), _shop_mail("legit")).get_json()
+    assert _flagged(body) and body["history_status"] == "ok" and body["raised_from"] is None
+
+
+def test_database_down_without_a_mark_stays_cautious():
+    body = _scan(_client(history=BrokenHistory(fail_read=True), cache=DictCache()), make_email(text="Please reply within 24 hours.\n")).get_json()
+    assert (body["history_status"], body["raised_from"]) == ("unavailable", "likely_legitimate")
+
+
+def test_cache_down_goes_to_the_database(capsys):
+    history = MemoryHistory()
+    client = _client(history=history, cache=BrokenCache())
+    _scan(client, _shop_mail("flag"))
+    body = _scan(client, _shop_mail("legit")).get_json()
+    assert _flagged(body) and body["history_status"] == "ok"
+    assert '"event": "cache_failed"' in capsys.readouterr().out
+
+
+def test_an_email_never_flags_itself_through_its_mark():
+    client = _client(cache=DictCache())
+    raw = _shop_mail("flag")
+    assert not _flagged(_scan(client, raw).get_json())
+    assert not _flagged(_scan(client, raw).get_json())  # its own SHA-256 is in the mark
+
+
+def test_a_new_rules_version_restores_the_mark_from_the_database():
+    history, cache = MemoryHistory(), DictCache()
+    old = create_app(history=history, cache=cache, auth=lambda: CREDS, rules_version="aaaaaaaaaaaa").test_client()
+    new = create_app(history=history, cache=cache, auth=lambda: CREDS, rules_version="bbbbbbbbbbbb").test_client()
+    _scan(old, _shop_mail("flag"))
+    assert _flagged(_scan(new, _shop_mail("legit")).get_json())  # from the database
+    assert cache.items[f"flag:bbbbbbbbbbbb:{SHOP}"]  # and the mark is back for the new version
+
+
+def test_same_scans_give_the_same_verdicts_through_valkey_and_through_the_database_only():
+    sequence = [
+        _shop_mail("legit"), _shop_mail("forged"), _shop_mail("legit", 1), _shop_mail("flag"), _shop_mail("legit", 2),
+        _shop_mail("flag"), _shop_mail("flag", 3), _shop_mail("legit"), make_email(text="Please reply within 24 hours.\n"),
+        *[(SAMPLES / name).read_bytes() for name in ("phishing_lookalike_sender.eml", "legit_receipt.eml", "phishing_lookalike_sender.eml")],
+    ]  # fmt: skip
+
+    def verdicts(cache):
+        client = _client(history=MemoryHistory(), cache=cache)
+        return [(b["verdict"], b["score"], _flagged(b)) for b in (_scan(client, raw).get_json() for raw in sequence)]
+
+    with_cache, database_only = verdicts(DictCache()), verdicts(NoCache())
+    assert with_cache == database_only
+    assert any(flagged for _, _, flagged in database_only)  # the sequence does exercise the history signal
+
+
+def _rules_version(client):
+    return client.get("/api/version", headers=AUTH).get_json()["rules_version"]
