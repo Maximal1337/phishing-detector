@@ -14,24 +14,27 @@ from .checks.history import HistoryStore
 from .models import Finding, Indicator, ParsedEmail, Result
 from .parser import parse
 
+# Weights marked "tuned" come from scripts/evaluate.py on the dev split of the
+# public corpora (k = 10; see the Evaluation section of the README). The others
+# are hand-set: too few hits on that data, or era signals it can't judge.
 WEIGHTS: dict[str, int] = {
-    # Authentication-Results (topmost header only)
+    # Authentication-Results (topmost header only); era signals, hand-set
     "auth.spf_fail": 15,
     "auth.spf_softfail": 5,
     "auth.dkim_fail": 10,
     "auth.dmarc_fail": 25,
     "auth.dmarc_pass": 0,  # not suspicious; recorded because the history check trusts it
     # Sender
-    "sender.display_name_address": 25,
-    "sender.brand_mismatch": 25,
+    "sender.display_name_address": 20,  # tuned
+    "sender.brand_mismatch": 40,  # tuned
     "sender.lookalike_domain": 35,
     "sender.punycode": 20,
-    "sender.reply_to_mismatch": 15,
-    "sender.return_path_mismatch": 5,
+    "sender.reply_to_mismatch": 0,  # tuned: more common in legitimate mailing-list mail than in phishing
+    "sender.return_path_mismatch": 0,  # tuned: same, bounce addresses of mailing services
     # Links
     "links.ip_host": 30,
-    "links.text_href_mismatch": 30,
-    "links.lookalike_domain": 35,
+    "links.text_href_mismatch": 20,  # tuned
+    "links.lookalike_domain": 25,  # tuned
     "links.brand_in_subdomain": 30,
     "links.punycode": 20,
     "links.userinfo": 25,
@@ -39,19 +42,19 @@ WEIGHTS: dict[str, int] = {
     "links.password_form": 35,
     "links.risky_tld": 15,
     "links.shortener": 10,
-    "links.nonstandard_port": 10,
+    "links.nonstandard_port": 5,  # tuned
     # Wording (each category counts once)
-    "wording.urgency": 10,
-    "wording.threat": 10,
-    "wording.credentials": 15,
-    "wording.payment": 10,
-    "wording.prize": 10,
-    "wording.generic_greeting": 5,
+    "wording.urgency": 20,  # tuned
+    "wording.threat": 30,  # tuned
+    "wording.credentials": 40,  # tuned
+    "wording.payment": 40,  # tuned
+    "wording.prize": 0,  # tuned: more common in legitimate mail than in phishing on this data
+    "wording.generic_greeting": 40,  # tuned
     # Attachments (MIME metadata only)
     "attach.executable": 40,
     "attach.double_extension": 35,
     "attach.macro_office": 30,
-    "attach.html": 25,
+    "attach.html": 40,  # tuned
     "attach.type_mismatch": 25,
     "attach.password_hint": 15,
     "attach.archive": 10,

@@ -4,7 +4,7 @@ from helpers import make_email
 
 from phishing_detector import analyze
 from phishing_detector.checks.history import InMemoryHistory
-from phishing_detector.scoring import HISTORY_UNAVAILABLE_NOTE, NO_HISTORY_NOTE
+from phishing_detector.scoring import HISTORY_UNAVAILABLE_NOTE, NO_HISTORY_NOTE, SUSPICIOUS_AT, WEIGHTS
 
 PHISHING_TEXT = "Urgent: your account has been suspended. Verify your account at http://203.0.113.5/login now.\n"
 NORMAL_TEXT = "Hello,\nyour monthly statement is ready in online banking.\n"
@@ -100,11 +100,13 @@ def test_history_status():
 
 
 def test_unavailable_history_raises_the_verdict_when_a_flag_could_have_changed_it():
-    # Score 10 (urgency only): a history flag (+20) would make it suspicious.
+    # Urgency only: below "suspicious" on its own, but a history flag would push it over.
+    urgency, flag = WEIGHTS["wording.urgency"], WEIGHTS["history.domain_flagged"]
+    assert urgency < SUSPICIOUS_AT <= urgency + flag
     raw = _mail("examplebank.test", "pass", "Hello,\nplease reply urgently about the meeting room.\n")
     assert analyze(raw, history=InMemoryHistory()).verdict == "likely_legitimate"
     result = analyze(raw, history=_Broken())
-    assert (result.score, result.verdict) == (10, "suspicious")
+    assert (result.score, result.verdict) == (urgency, "suspicious")
     assert (result.raised_from, result.raise_reason) == ("likely_legitimate", "history unavailable")
 
 
