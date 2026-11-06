@@ -171,6 +171,26 @@ aws secretsmanager put-secret-value --profile <your-profile> --region eu-north-1
 unset PW
 ```
 
+### 3. Image and app stack
+
+```bash
+AWS_PROFILE=<profile> AWS_REGION=eu-north-1 scripts/build_push.sh   # prints image_tag and image_digest
+cd terraform/app
+cp terraform.tfvars.example terraform.tfvars                        # profile, account, image_tag, image_digest
+terraform init
+terraform plan -out=app.tfplan
+terraform apply app.tfplan
+cd ../.. && AWS_PROFILE=<profile> python scripts/smoke_test.py "$(cd terraform/app && terraform output -raw url)"
+```
+
+In our run, two healthy targets came about 3 minutes 20 seconds after the apply started (cloud-init takes about
+85 seconds per instance). `scripts/smoke_test.py` reads the Basic-auth secret inside its own process and never prints it.
+
+On an account that has never had an Auto Scaling group, AWS creates the `AWSServiceRoleForAutoScaling` service-linked role
+during the first apply, and the first launches can fail with "Access denied when attempting to assume role" until it has
+propagated. The group retries by itself a minute later, but Terraform marks it as tainted. Then run
+`terraform untaint aws_autoscaling_group.app` and apply again; the role stays in the account afterwards.
+
 ## Invoke
 
 _Using the web UI and the HTTP API on the deployed stack._
