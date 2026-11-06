@@ -37,9 +37,14 @@ case "$media" in
   *index* | *manifest.list*) echo "Pushed an image index ($media), not a single manifest" >&2; exit 1 ;;
 esac
 
+# Poll rather than use `aws ecr wait`: right after a push the scan may not exist yet,
+# and the waiter treats that as a failure.
 echo "waiting for the ECR scan of $digest ..."
-aws_ecr wait image-scan-complete --repository-name "$repo_name" --image-id imageDigest="$digest"
-status=$(aws_ecr describe-image-scan-findings --repository-name "$repo_name" --image-id imageDigest="$digest" --query 'imageScanStatus.status' --output text)
+status=PENDING
+for _ in $(seq 1 60); do # up to 5 minutes
+  status=$(aws_ecr describe-image-scan-findings --repository-name "$repo_name" --image-id imageDigest="$digest"     --query 'imageScanStatus.status' --output text 2>/dev/null) || status=PENDING
+  case "$status" in PENDING | IN_PROGRESS) sleep 5 ;; *) break ;; esac
+done
 counts=$(aws_ecr describe-image-scan-findings --repository-name "$repo_name" --image-id imageDigest="$digest" --query 'imageScanFindings.findingSeverityCounts' --output json)
 echo "scan $status: $counts"
 if [ "$status" != "COMPLETE" ]; then

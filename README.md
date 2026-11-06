@@ -119,7 +119,7 @@ API: `POST /api/scan` (multipart field `email`, or form field `text`) returns th
 curl -s -F "email=@samples/phishing_spoofed_bank.eml" http://127.0.0.1:8000/api/scan
 ```
 
-**Updating the dependency lock** (after changing `requirements.txt`; network on, in the same base image):
+**Updating the dependency lock** (after changing `requirements.txt`; network on; the image below is the one the current lock was made with):
 
 ```bash
 IMAGE=python:3.13.17-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
@@ -219,9 +219,26 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
   with `textContent`, and links are shown defanged, never as clickable links. The container runs as UID 10001 with a
   read-only root filesystem, no Linux capabilities and `no-new-privileges`. Logs are JSON lines with request ids,
   status, verdict and score only, never email content.
-  The 7-day rule is for third-party packages and tools. The Docker base image (`python:3.13.17-slim`, pinned by digest)
+  The 7-day rule is for third-party packages and tools. The Docker base image (`python:3.13.18-slim`, pinned by digest)
   is decided by the ECR vulnerability scan instead: if a newer `python:3.13-slim` fixes HIGH or CRITICAL findings,
-  the image moves to it (again pinned by digest) without waiting.
+  the image moves to it (again pinned by digest) without waiting. That is how 3.13.18 was chosen a day after its release:
+  it fixed the HIGH finding in `apt` that the scan reported on 3.13.17 (5 HIGH before, 4 after; MEDIUM 9, LOW 3 unchanged).
+- Every push is scanned by ECR (basic scanning); `scripts/build_push.sh` waits for the result, prints the counts and
+  stops on an incomplete scan or any CRITICAL finding. The instances run the image by digest (`repository@sha256:…`),
+  so EC2 runs exactly the image that was scanned; the tag (the commit) is for people. HIGH findings accepted for now,
+  in the image pushed for deployment (tag 4340dddf6d3d):
+
+  | CVE | Package (version) | Fix available? | Why accepted |
+  |---|---|---|---|
+  | CVE-2026-5435, CVE-2026-19499 | glibc (2.41-12+deb13u4) | No: Debian trixie and trixie-security have no newer package (checked 2026-11-06) | Nothing to upgrade to yet. Exposure is limited: non-root, read-only container without capabilities, private subnets, Basic auth in front. The CVE details were not analysed further |
+  | CVE-2026-85091, CVE-2026-76844 | zlib (1.3.dfsg+really1.3.1-1+b1) | No, same check | Same as above |
+
+  Policy: rebuild and redeploy when Debian or a newer `python:3.13-slim` ships a fix; a CRITICAL finding blocks the push.
+- Build attestations are off (`--provenance=false --sbom=false`). They were unsigned and nothing checked them, but they
+  turned each push into an image index whose scan result sat on an untagged child manifest instead of the tagged image,
+  and added two extra entries per push to the repository. Integrity comes from the digest deployment, immutable tags,
+  hashed dependencies and the scan gate. Next step: signing (cosign with a KMS key, or AWS Signer/Notation) with the
+  signature checked before `docker run`, and an SBOM as a separate artifact.
 
 ### Scanner findings that are not fixed
 
