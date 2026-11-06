@@ -22,6 +22,7 @@ _spec.loader.exec_module(evaluate)
 
 PHISHING = ["phishing_lookalike_sender.eml", "phishing_spoofed_bank.eml", "phishing_invoice_attachment.eml"]
 HAM = ["legit_newsletter.eml", "legit_receipt.eml", "legit_internal.eml"]
+MODERN_HAM = ["legit_shared_document.eml", "legit_mfa_code.eml"]
 
 
 def _fake_corpus(tmp_path):
@@ -39,9 +40,16 @@ def _fake_corpus(tmp_path):
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
 
+    (tmp_path / "apache").mkdir()
+    modern = mailbox.mbox(str(tmp_path / "apache" / "list-2024-01.mbox"))
+    for name in MODERN_HAM:
+        modern.add((SAMPLES / name).read_bytes())
+    modern.close()
+
     files = [
         {"label": "phishing", "corpus": "nazario", "name": "phishing-test", "sha256": "0" * 64},
         {"label": "ham", "corpus": "spamassassin", "name": "ham.tar.bz2", "sha256": "1" * 64},
+        {"label": "ham", "corpus": "apache", "name": "list-2024-01.mbox", "sha256": "2" * 64},
     ]
     (tmp_path / "manifest.json").write_text(json.dumps({"files": files}), encoding="utf-8")
     return tmp_path
@@ -49,8 +57,9 @@ def _fake_corpus(tmp_path):
 
 def test_reads_mbox_and_tar_without_unpacking(tmp_path):
     records, files, problems = evaluate.scan_corpora(_fake_corpus(tmp_path))
-    assert sorted(r.label for r in records) == ["ham"] * 3 + ["phishing"] * 3  # "cmds" skipped
-    assert sum(f["dev"] + f["test"] for f in files) == 6
+    assert sorted(r.label for r in records) == ["ham"] * 5 + ["phishing"] * 3  # "cmds" skipped
+    assert sorted(r.corpus for r in records if r.label == "ham") == ["apache"] * 2 + ["spamassassin"] * 3
+    assert sum(f["dev"] + f["test"] for f in files) == 8
     assert not problems
     assert sorted(p.name for p in (tmp_path / "spamassassin").iterdir()) == ["ham.tar.bz2"]
 
@@ -58,10 +67,11 @@ def test_reads_mbox_and_tar_without_unpacking(tmp_path):
 def test_report_contains_aggregates_only(tmp_path, capsys):
     assert evaluate.main(["--data", str(_fake_corpus(tmp_path)), "--split", "all"]) == 0
     out = capsys.readouterr().out
-    assert "Messages in this report: 3 phishing, 3 ham." in out
+    assert "Messages in this report: 3 phishing, 3 ham-2002 (SpamAssassin), 2 ham-2024 (Apache users@tomcat)." in out
+    assert "| Signals | Flagged at | ham-2002 (SpamAssassin) | ham-2024 (Apache users@tomcat) |" in out
     assert "| `links.lookalike_domain` |" in out
 
-    for name in PHISHING + HAM:
+    for name in PHISHING + HAM + MODERN_HAM:
         msg = email.message_from_bytes((SAMPLES / name).read_bytes(), policy=policy.default)
         headers = [str(v) for h in ("From", "To", "Reply-To", "Return-Path") for v in (msg.get_all(h) or [])]
         for _, address in getaddresses(headers):

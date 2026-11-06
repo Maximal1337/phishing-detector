@@ -74,11 +74,20 @@ VARIANTS = {
 }
 THRESHOLDS = {"phishing": PHISHING_AT, "phishing or suspicious": SUSPICIOUS_AT}
 
+# Legitimate-mail sets, each reported on its own. Tuning and the main metrics use
+# the 2002 set (as in the first iteration); the 2024 set is a check on modern mail.
+HAM_SETS = {"spamassassin": "ham-2002 (SpamAssassin)", "apache": "ham-2024 (Apache users@tomcat)"}
+TUNING_HAM = "spamassassin"
+# Synthetic modern legitimate mails (samples/) that the newer signals could misjudge.
+SAMPLES = Path(__file__).resolve().parent.parent / "samples"
+MODERN_LEGIT_SAMPLES = ("legit_modern_newsletter.eml", "legit_shared_document.eml", "legit_mfa_code.eml")
+
 
 @dataclass(frozen=True)
 class Scanned:
     label: str  # "phishing" or "ham"
     split: str  # "dev" or "test"
+    corpus: str
     ids: frozenset[str]
     has_auth_header: bool
     has_link: bool = False
@@ -128,6 +137,11 @@ def tunable_signals(dev: list[Scanned]) -> list[str]:
         for s in sorted(WEIGHTS)
         if s not in ERA_SIGNALS and not s.startswith("history.") and sum(s in r.ids for r in dev) >= MIN_SUPPORT
     ]
+
+
+def tuning_set(records: list[Scanned]) -> list[Scanned]:
+    """Phishing plus the ham set used for tuning and the main metrics."""
+    return [r for r in records if r.label == "phishing" or r.corpus == TUNING_HAM]
 
 
 def suggested_weights(dev: list[Scanned], k: float) -> dict[str, int]:
@@ -205,6 +219,7 @@ def scan_corpora(data: Path) -> tuple[list[Scanned], list[dict], Counter]:
                 Scanned(
                     label=entry["label"],
                     split=split,
+                    corpus=entry["corpus"],
                     ids=frozenset(i.id for i in result.indicators),
                     has_auth_header=result.input_type == "email" and NO_HEADER_NOTE not in result.notes,
                     has_link=any(link.href.lower().startswith(("http://", "https://")) for link in parsed.links),
@@ -224,24 +239,30 @@ def _pct(n: int, total: int) -> str:
 
 
 def report(records: list[Scanned], files: list[dict], problems: Counter, split: str) -> str:
-    dev = [r for r in records if r.split == "dev"]
-    chosen = records if split == "all" else [r for r in records if r.split == split]
+    all_dev = [r for r in records if r.split == "dev"]
+    all_chosen = records if split == "all" else [r for r in records if r.split == split]
+    ham_sets = {c: name for c, name in HAM_SETS.items() if any(r.corpus == c for r in records)}
+    dev_ham = {name: [r for r in all_dev if r.corpus == c] for c, name in ham_sets.items()}
+    chosen_ham = {name: [r for r in all_chosen if r.corpus == c] for c, name in ham_sets.items()}
+    dev, chosen = tuning_set(all_dev), tuning_set(all_chosen)
     by_label = {label: [r for r in chosen if r.label == label] for label in ("phishing", "ham")}
     dev_by_label = {label: [r for r in dev if r.label == label] for label in ("phishing", "ham")}
     out = [f"# Evaluation report ({split} split)", ""]
 
     out += ["## Data", "", "| Corpus | File | Class | SHA-256 | dev | test |", "|---|---|---|---|---|---|"]
     out += [f"| {f['corpus']} | {f['name']} | {f['label']} | `{f['sha256']}` | {f['dev']} | {f['test']} |" for f in files]
-    out += ["", f"Messages in this report: {len(by_label['phishing'])} phishing, {len(by_label['ham'])} ham."]
+    out += ["", f"Messages in this report: {len(by_label['phishing'])} phishing, "
+            + ", ".join(f"{len(g)} {name}" for name, g in chosen_ham.items()) + "."]
+    out += [f"Main metrics and tuning use phishing and {HAM_SETS[TUNING_HAM]}; the other legitimate sets are reported separately."]
     out += [f"- {what}: {n}" for what, n in sorted(problems.items())] + [""]
 
     out += ["## Era check (dev split)", ""]
-    for label, group in dev_by_label.items():
+    for label, group in {"phishing": dev_by_label["phishing"], **dev_ham}.items():
         out.append(f"- {label}: {_pct(sum(r.has_auth_header for r in group), len(group))} have an Authentication-Results header")
     out.append("")
 
     silent = [r for r in dev_by_label["phishing"] if not (r.ids - frozenset(ERA_SIGNALS))]
-    groups = {"phishing": dev_by_label["phishing"], "ham": dev_by_label["ham"], "phishing with no indicator (era signals aside)": silent}
+    groups = {"phishing": dev_by_label["phishing"], **dev_ham, "phishing with no indicator (era signals aside)": silent}
     out += ["## What the mails contain (dev split)", "", "| Group | Messages | With an http(s) link | With an HTML part | With an attachment |", "|---|---|---|---|---|"]
     for name, group in groups.items():
         n = len(group)
@@ -252,14 +273,14 @@ def report(records: list[Scanned], files: list[dict], problems: Counter, split: 
     out.append("")
 
     out += ["## Signal frequencies (dev split)", "", "Era signals don't take part in weight tuning; the reason is in the last column.", ""]
-    out += ["| Signal | Weight | Phishing | Ham | Era signal |", "|---|---|---|---|---|"]
+    columns = {"Phishing": dev_by_label["phishing"], **dev_ham}
+    out += ["| Signal | Weight | " + " | ".join(columns) + " | Era signal |", "|---|---|" + "---|" * len(columns) + "---|"]
     for signal in sorted(WEIGHTS, key=lambda s: (s.split(".")[0], s)):
-        p = sum(signal in r.ids for r in dev_by_label["phishing"])
-        h = sum(signal in r.ids for r in dev_by_label["ham"])
-        out.append(
-            f"| `{signal}` | {WEIGHTS[signal]} | {p} ({_pct(p, len(dev_by_label['phishing']))}) "
-            f"| {h} ({_pct(h, len(dev_by_label['ham']))}) | {ERA_SIGNALS.get(signal, '')} |"
-        )
+        cells = []
+        for group in columns.values():
+            n = sum(signal in r.ids for r in group)
+            cells.append(f"{n} ({_pct(n, len(group))})")
+        out.append(f"| `{signal}` | {WEIGHTS[signal]} | " + " | ".join(cells) + f" | {ERA_SIGNALS.get(signal, '')} |")
     out.append("")
 
     out += [f"## Metrics ({split} split)", "", "Positive class: phishing. A mail counts as flagged when its score reaches the threshold.", ""]
@@ -274,14 +295,34 @@ def report(records: list[Scanned], files: list[dict], problems: Counter, split: 
             )
     out.append("")
 
-    out += [f"## Score distribution ({split} split, without era signals)", "", "| Score | Phishing | Ham |", "|---|---|---|"]
-    bins = [(0, 0), (1, SUSPICIOUS_AT - 1), (SUSPICIOUS_AT, PHISHING_AT - 1), (PHISHING_AT, MAX_SCORE)]
-    for low, high in bins:
-        row = [sum(low <= score(r.ids, VARIANTS["without era signals"]) <= high for r in by_label[k]) for k in ("phishing", "ham")]
-        out.append(f"| {low}-{high} | {row[0]} | {row[1]} |")
+    out += [f"## False positives on each legitimate set ({split} split)", ""]
+    out += ["| Signals | Flagged at | " + " | ".join(chosen_ham) + " |", "|---|---|" + "---|" * len(chosen_ham)]
+    for name, excluded in VARIANTS.items():
+        for label, threshold in THRESHOLDS.items():
+            cells = []
+            for group in chosen_ham.values():
+                fp = sum(score(r.ids, excluded) >= threshold for r in group)
+                cells.append(f"{_pct(fp, len(group))} ({fp} of {len(group)})")
+            out.append(f"| {name} | {label} (≥ {threshold}) | " + " | ".join(cells) + " |")
+    out.append("")
+
+    out += ["## Synthetic modern legitimate mails (samples/, all signals)", "", "| Sample | Score | Verdict | Indicators with weight |", "|---|---|---|---|"]
+    for name in MODERN_LEGIT_SAMPLES:
+        if (SAMPLES / name).exists():
+            result = analyze((SAMPLES / name).read_bytes())
+            ids = ", ".join(f"{i.id} +{i.weight}" for i in result.indicators if i.weight) or "-"
+            out.append(f"| {name} | {result.score} | {result.verdict} | {ids} |")
     out.append("")
 
     era_free = VARIANTS["without era signals"]
+    score_groups = {"Phishing": by_label["phishing"], **chosen_ham}
+    out += [f"## Score distribution ({split} split, without era signals)", "", "| Score | " + " | ".join(score_groups) + " |", "|---|" + "---|" * len(score_groups)]
+    bins = [(0, 0), (1, SUSPICIOUS_AT - 1), (SUSPICIOUS_AT, PHISHING_AT - 1), (PHISHING_AT, MAX_SCORE)]
+    for low, high in bins:
+        row = [sum(low <= score(r.ids, era_free) <= high for r in group) for group in score_groups.values()]
+        out.append(f"| {low}-{high} | " + " | ".join(map(str, row)) + " |")
+    out.append("")
+
     out += [f"## Most common indicator sets among errors ({split} split, without era signals, flagged at ≥ {PHISHING_AT})", ""]
     for title, label, wrong in (("False positives (ham flagged)", "ham", True), ("False negatives (phishing missed)", "phishing", False)):
         sets = Counter(
