@@ -4,7 +4,7 @@ Run it inside the evaluation container (README, "Evaluation"): it writes to
 --dest, a Docker volume, never into the repository. Files are only downloaded
 and hashed here; nothing is opened or unpacked.
 
-SHA-256 values were recorded on the first download (the sources publish no
+SHA-256 values were recorded on the first download, 2026-11-06 (the sources publish no
 checksums) and are pinned below, so a later download that differs is refused.
 """
 
@@ -23,12 +23,12 @@ SPAMASSASSIN = "https://spamassassin.apache.org/old/publiccorpus/"
 
 # label: "phishing" or "ham"; size in bytes as served; sha256 pinned after the first download (None = not pinned yet).
 SOURCES = [
-    {"label": "phishing", "corpus": "nazario", "name": "phishing-2023", "url": NAZARIO + "phishing-2023", "size": 7763704, "sha256": None},
-    {"label": "phishing", "corpus": "nazario", "name": "phishing-2024", "url": NAZARIO + "phishing-2024", "size": 15457816, "sha256": None},
-    {"label": "phishing", "corpus": "nazario", "name": "phishing-2025", "url": NAZARIO + "phishing-2025", "size": 18769863, "sha256": None},
-    {"label": "ham", "corpus": "spamassassin", "name": "20030228_easy_ham.tar.bz2", "url": SPAMASSASSIN + "20030228_easy_ham.tar.bz2", "size": 1612216, "sha256": None},
-    {"label": "ham", "corpus": "spamassassin", "name": "20030228_easy_ham_2.tar.bz2", "url": SPAMASSASSIN + "20030228_easy_ham_2.tar.bz2", "size": 1077892, "sha256": None},
-    {"label": "ham", "corpus": "spamassassin", "name": "20030228_hard_ham.tar.bz2", "url": SPAMASSASSIN + "20030228_hard_ham.tar.bz2", "size": 1029898, "sha256": None},
+    {"label": "phishing", "corpus": "nazario", "name": "phishing-2023", "url": NAZARIO + "phishing-2023", "size": 7763704, "sha256": "5007f1c1dc91b15e93e988afa3a1cf402e15c88f765d3057be8bfec50dae1fe8"},
+    {"label": "phishing", "corpus": "nazario", "name": "phishing-2024", "url": NAZARIO + "phishing-2024", "size": 15457816, "sha256": "60afa40a2757170093a2bde31ec9cda4e54d33992203ce04bfbbc86d2e5e5b99"},
+    {"label": "phishing", "corpus": "nazario", "name": "phishing-2025", "url": NAZARIO + "phishing-2025", "size": 18769863, "sha256": "f1fa7e0fe35c9a16f36d9aa20ade7e1d3908d1d0c1d917b8c53c8aa799ec1c8f"},
+    {"label": "ham", "corpus": "spamassassin", "name": "20030228_easy_ham.tar.bz2", "url": SPAMASSASSIN + "20030228_easy_ham.tar.bz2", "size": 1612216, "sha256": "2b7b65904bcfcc31d2b5f51946f2d261370b257402cbbd62930b46ab83367438"},
+    {"label": "ham", "corpus": "spamassassin", "name": "20030228_easy_ham_2.tar.bz2", "url": SPAMASSASSIN + "20030228_easy_ham_2.tar.bz2", "size": 1077892, "sha256": "b4bd3dc5ae5b40f38e99a0e41ad7d16b428b56e818e3a6ffa07330d62004dd38"},
+    {"label": "ham", "corpus": "spamassassin", "name": "20030228_hard_ham.tar.bz2", "url": SPAMASSASSIN + "20030228_hard_ham.tar.bz2", "size": 1029898, "sha256": "ce2ce67880643dbde65ea7f85bffbfe4417349c4bd80b6b0de56262ae6b0a9c9"},
 ]  # fmt: skip
 
 MAX_BYTES = 50_000_000  # refuse anything far larger than expected
