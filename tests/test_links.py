@@ -114,6 +114,17 @@ def test_recipient_address_in_a_link():
     assert "links.recipient_in_url" not in _modern(text="Log in: http://portal.example.net/login?lang=en")
 
 
+def test_recipient_address_in_subscription_links_is_not_a_signal():
+    for path in ("unsubscribe", "opt-out", "optout", "email-preferences", "manage-your-subscription"):
+        assert "links.recipient_in_url" not in _modern(text=f"https://news.example.org/{path}?email=bob@example.org")
+    for label in ("Unsubscribe", "Opt out", "Update your preferences", "Manage subscription"):
+        html = _anchor("https://news.example.org/u/a1?email=bob%40example.org", label)
+        assert "links.recipient_in_url" not in _modern(html=html)
+    # The word only in the query doesn't count: a kit can append it as easily as the address.
+    assert "links.recipient_in_url" in _modern(text="http://portal.example.net/login?next=unsubscribe&user=bob@example.org")
+    assert "links.recipient_in_url" in _modern(html=_anchor("http://portal.example.net/login?u=bob@example.org", "Sign in"))
+
+
 def test_redirect_parameters_and_amp():
     found = _modern(text="Open http://www.example.com/url?q=http://evil.example.net/login&sa=D")
     assert found["links.redirect_param"].evidence == ("www[.]example[.]com forwards to evil[.]example[.]net",)
@@ -139,3 +150,20 @@ def test_call_to_action_link_text():
     assert "links.cta_text" not in _modern(html=_anchor("https://portal.example.net/", "Read the full article"))
     long_text = "Sign in to the conference wiki to find the slides from every talk of the day"
     assert "links.cta_text" not in _modern(html=_anchor("https://portal.example.net/", long_text))
+
+
+def test_link_protection_wrappers_are_not_redirects_or_address_leaks():
+    wrapped = "https://eur01.safelinks.protection.outlook.com/?url=https%3A%2F%2Fwww.example.org%2Fdocs&data=05%7C02%7Cbob%40example.org%7C0"
+    found = _modern(text=f"See {wrapped}")
+    assert "links.redirect_param" not in found and "links.recipient_in_url" not in found
+    proofpoint = "https://urldefense.com/v3/__https://www.example.org/docs__;!!x!bob@example.org$"
+    assert "links.recipient_in_url" not in _modern(text=f"See {proofpoint}")
+    # The same redirect on any other host still counts.
+    assert "links.redirect_param" in _modern(text="See https://click.example.net/?url=https%3A%2F%2Fwww.example.org%2Fdocs")
+
+
+def test_github_pages_is_github_not_a_lookalike():
+    parsed = parsed_email(text="The GitHub docs: https://project.github.io/guide", to="bob@example.org")
+    ids = {f.id for f in links.check(parsed, [])}  # the shipped brand list
+    assert not ids & {"links.lookalike_domain", "links.brand_link_mismatch"}
+    assert "links.abused_hosting" in ids  # still free hosting, with its own small weight

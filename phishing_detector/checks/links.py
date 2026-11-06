@@ -53,8 +53,9 @@ _SCRIPT_SCHEMES = ("javascript", "data", "vbscript")
 _LOOKS_LIKE_URL = re.compile(r"^(?:https?://)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$", re.IGNORECASE)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _BASE64_TOKEN = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
-# Links people are meant to follow with their address in them: unsubscribe and preference pages.
-_SUBSCRIPTION_LINK = re.compile(r"unsubscribe|opt-?out|preferences|manage.{0,20}subscription", re.IGNORECASE)
+# Links people are meant to follow with their address in them: unsubscribe and preference pages,
+# recognised by the link's text or the URL path (not the query, which a phishing kit controls as easily).
+_SUBSCRIPTION_LINK = re.compile(r"unsubscribe|opt[- _]?out|preferences|manage.{0,20}subscription", re.IGNORECASE)
 # Query keys that commonly carry a redirect target.
 _REDIRECT_KEYS = frozenset(
     "url u redirect redirect_uri redirect_url redir next target dest destination return returnurl return_url continue goto link".split()
@@ -103,6 +104,18 @@ def _carries_address(href: str, recipients: list[str]) -> bool:
         if _EMAIL.search(decoded) or any(r in decoded.lower() for r in recipients):
             return True
     return False
+
+
+# Link-protection services of the recipient's own mail gateway (Microsoft Defender Safe Links,
+# Proofpoint URL Defense, Mimecast). They wrap every link in a redirect that carries the
+# recipient's address, so those two signals would fire on any mail they touched.
+_LINK_PROTECTION = ("safelinks.protection.outlook.com", "urldefense.com", "urldefense.proofpoint.com")
+
+
+def _is_link_protection(host: str) -> bool:
+    if host.startswith("protect") and host.endswith(".mimecast.com"):
+        return True
+    return any(host == h or host.endswith("." + h) for h in _LINK_PROTECTION)
 
 
 def _redirect_target(href: str, host: str) -> str:
@@ -173,9 +186,11 @@ def check(
                 add("links.text_href_mismatch", f"text shows {defang_domain(shown_host)}, link goes to {defang_domain(host)}")
         if link.text and len(link.text) <= _MAX_CTA_LENGTH and (cta := _CTA.match(link.text)):
             add("links.cta_text", '"' + " ".join(cta.group(0).lower().split()).strip(' "') + '"')
-        if not _SUBSCRIPTION_LINK.search(f"{link.text} {href}") and _carries_address(href, parsed.to_addresses):
+        protected = _is_link_protection(host)
+        subscription = _SUBSCRIPTION_LINK.search(f"{link.text or ''} {urlsplit(href).path}")
+        if not protected and not subscription and _carries_address(href, parsed.to_addresses):
             add("links.recipient_in_url", f"link to {defang_domain(host)}")
-        if target := _redirect_target(href, host):
+        if not protected and (target := _redirect_target(href, host)):
             add("links.redirect_param", f"{defang_domain(host)} forwards to {defang_domain(target)}")
         if "@" in parts.netloc:
             add("links.userinfo", shown)

@@ -30,7 +30,7 @@ ups ups.com
 usps usps.com
 royalmail royalmail.com
 whatsapp whatsapp.com
-github github.com
+github github.com github.io githubusercontent.com
 zoom zoom.us
 ebay ebay.com
 walmart walmart.com
