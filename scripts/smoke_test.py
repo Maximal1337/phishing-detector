@@ -118,10 +118,12 @@ def watch(base: str, auth: str, seconds: int) -> int:
     last = None
     while time.time() < end:
         status, body = request(f"{base}/api/version", auth)
+        if status == 404:  # versions before /api/version report it in /healthz
+            status, body = request(f"{base}/healthz")
         version = json.loads(body).get("version") if status == 200 else None
         scan_status, _ = request(f"{base}/api/scan", auth, *multipart(sample.name, sample.read_bytes()))
         requests += 2
-        stamp = f"{time.time() - started:6.0f}s"
+        stamp = f"{time.strftime('%H:%M:%S', time.gmtime())}Z {time.time() - started:4.0f}s"
         for what, code in (("version", status), ("scan", scan_status)):
             if code != 200:
                 errors += 1
