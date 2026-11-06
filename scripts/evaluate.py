@@ -13,11 +13,14 @@ Split: each message's SHA-256 puts it, once and for all, in the dev split
 from __future__ import annotations
 
 import argparse
+import email
 import hashlib
 import json
 import mailbox
+import math
 import sys
 import tarfile
+from email import policy
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -27,10 +30,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from phishing_detector import analyze  # noqa: E402
 from phishing_detector.checks.auth import NO_HEADER_NOTE  # noqa: E402
+from phishing_detector.parser import parse  # noqa: E402
 from phishing_detector.scoring import MAX_SCORE, PHISHING_AT, SUSPICIOUS_AT, WEIGHTS  # noqa: E402
 
 TEST_SHARE = 3  # out of 10
 MAX_MESSAGE_BYTES = 5_000_000
+
+# Weight tuning (dev split only): weight = k * ln(how much more often the signal
+# fires in phishing than in ham), add-one smoothing, rounded to a multiple of 5,
+# kept within 0..40. Only signals with enough dev hits and no era bias are tuned;
+# k is the one free parameter, picked for the best F1 at the phishing threshold
+# while at most 1 % of ham is flagged phishing and at most 2 % suspicious or
+# worse (so a single weak word can't make ordinary mail "suspicious"),
+# measured without the era signals.
+MIN_SUPPORT = 10
+WEIGHT_RANGE = (0, 40)
+K_GRID = tuple(range(4, 17))
+MAX_TUNING_FPR = 0.01  # ham flagged phishing (score >= 50)
+MAX_TUNING_SUSPICIOUS_FPR = 0.02  # ham flagged suspicious or phishing (score >= 25)
 
 # The ham is from 2002-2003 and the phishing from 2023-2025. These signals tell
 # the eras apart rather than phishing from legitimate mail, so this data can't
@@ -57,20 +74,25 @@ class Scanned:
     split: str  # "dev" or "test"
     ids: frozenset[str]
     has_auth_header: bool
+    has_link: bool = False
+    has_html: bool = False
+    has_attachment: bool = False
 
 
 def split_of(sha256: str) -> str:
     return "test" if int(sha256[:8], 16) % 10 < TEST_SHARE else "dev"
 
 
-def score(ids: frozenset[str], excluded: frozenset[str] = frozenset()) -> int:
-    return min(MAX_SCORE, sum(WEIGHTS[i] for i in ids if i not in excluded))
+def score(ids: frozenset[str], excluded: frozenset[str] = frozenset(), weights: dict[str, int] = WEIGHTS) -> int:
+    return min(MAX_SCORE, sum(weights[i] for i in ids if i not in excluded))
 
 
-def confusion(records: list[Scanned], excluded: frozenset[str], threshold: int) -> dict[str, int]:
+def confusion(
+    records: list[Scanned], excluded: frozenset[str], threshold: int, weights: dict[str, int] = WEIGHTS
+) -> dict[str, int]:
     counts = Counter()
     for r in records:
-        flagged = score(r.ids, excluded) >= threshold
+        flagged = score(r.ids, excluded, weights) >= threshold
         counts[("tp" if flagged else "fn") if r.label == "phishing" else ("fp" if flagged else "tn")] += 1
     return {k: counts[k] for k in ("tp", "fp", "fn", "tn")}
 
@@ -82,6 +104,44 @@ def metrics(c: dict[str, int]) -> dict[str, float]:
     precision, recall = ratio(c["tp"], c["tp"] + c["fp"]), ratio(c["tp"], c["tp"] + c["fn"])
     f1 = ratio(2 * precision * recall, precision + recall) if precision + recall else 0.0
     return {"precision": precision, "recall": recall, "f1": f1, "fpr": ratio(c["fp"], c["fp"] + c["tn"])}
+
+
+# --- weight tuning (dev split only) --------------------------------------
+
+
+def log_ratio(signal: str, phishing: list[Scanned], ham: list[Scanned]) -> float:
+    p = (sum(signal in r.ids for r in phishing) + 1) / (len(phishing) + 2)
+    h = (sum(signal in r.ids for r in ham) + 1) / (len(ham) + 2)
+    return math.log(p / h)
+
+
+def tunable_signals(dev: list[Scanned]) -> list[str]:
+    return [
+        s
+        for s in sorted(WEIGHTS)
+        if s not in ERA_SIGNALS and not s.startswith("history.") and sum(s in r.ids for r in dev) >= MIN_SUPPORT
+    ]
+
+
+def suggested_weights(dev: list[Scanned], k: float) -> dict[str, int]:
+    phishing = [r for r in dev if r.label == "phishing"]
+    ham = [r for r in dev if r.label == "ham"]
+    weights = dict(WEIGHTS)
+    for signal in tunable_signals(dev):
+        raw = k * log_ratio(signal, phishing, ham)
+        weights[signal] = int(min(max(5 * round(raw / 5), WEIGHT_RANGE[0]), WEIGHT_RANGE[1]))
+    return weights
+
+
+def pick_k(dev: list[Scanned]) -> tuple[float, list[tuple[float, dict[str, float], dict[str, float]]]]:
+    era_free = frozenset(ERA_SIGNALS)
+    rows = []
+    for k in K_GRID:
+        weights = suggested_weights(dev, k)
+        rows.append((k, metrics(confusion(dev, era_free, PHISHING_AT, weights)), metrics(confusion(dev, era_free, SUSPICIOUS_AT, weights))))
+    allowed = [row for row in rows if row[1]["fpr"] <= MAX_TUNING_FPR and row[2]["fpr"] <= MAX_TUNING_SUSPICIOUS_FPR] or rows
+    best = max(allowed, key=lambda row: (round(row[1]["f1"], 6), -row[0]))
+    return best[0], rows
 
 
 # --- reading the corpora (in memory only) --------------------------------
@@ -127,13 +187,24 @@ def scan_corpora(data: Path) -> tuple[list[Scanned], list[dict], Counter]:
             seen.add(sha)
             try:
                 result = analyze(raw)
+                parsed = parse(raw)
+                types = {part.get_content_type() for part in email.message_from_bytes(raw, policy=policy.default).walk()}
             except Exception as exc:  # count the type only; the message stays private
                 problems[f"error: {type(exc).__name__}"] += 1
                 continue
             split = split_of(sha)
             counts[split] += 1
-            has_auth = result.input_type == "email" and NO_HEADER_NOTE not in result.notes
-            records.append(Scanned(entry["label"], split, frozenset(i.id for i in result.indicators), has_auth))
+            records.append(
+                Scanned(
+                    label=entry["label"],
+                    split=split,
+                    ids=frozenset(i.id for i in result.indicators),
+                    has_auth_header=result.input_type == "email" and NO_HEADER_NOTE not in result.notes,
+                    has_link=any(link.href.lower().startswith(("http://", "https://")) for link in parsed.links),
+                    has_html="text/html" in types,
+                    has_attachment=bool(parsed.attachments),
+                )
+            )
         files.append({**{k: entry[k] for k in ("corpus", "name", "label", "sha256")}, "dev": counts["dev"], "test": counts["test"]})
     return records, files, problems
 
@@ -160,6 +231,17 @@ def report(records: list[Scanned], files: list[dict], problems: Counter, split: 
     out += ["## Era check (dev split)", ""]
     for label, group in dev_by_label.items():
         out.append(f"- {label}: {_pct(sum(r.has_auth_header for r in group), len(group))} have an Authentication-Results header")
+    out.append("")
+
+    silent = [r for r in dev_by_label["phishing"] if not (r.ids - frozenset(ERA_SIGNALS))]
+    groups = {"phishing": dev_by_label["phishing"], "ham": dev_by_label["ham"], "phishing with no indicator (era signals aside)": silent}
+    out += ["## What the mails contain (dev split)", "", "| Group | Messages | With an http(s) link | With an HTML part | With an attachment |", "|---|---|---|---|---|"]
+    for name, group in groups.items():
+        n = len(group)
+        out.append(
+            f"| {name} | {n} | {_pct(sum(r.has_link for r in group), n)} | {_pct(sum(r.has_html for r in group), n)} "
+            f"| {_pct(sum(r.has_attachment for r in group), n)} |"
+        )
     out.append("")
 
     out += ["## Signal frequencies (dev split)", "", "Era signals don't take part in weight tuning; the reason is in the last column.", ""]
@@ -201,7 +283,41 @@ def report(records: list[Scanned], files: list[dict], problems: Counter, split: 
             if (score(r.ids, era_free) >= PHISHING_AT) == wrong
         )
         out += [f"**{title}:**", ""] + [f"- {n} x {ids}" for ids, n in sets.most_common(8)] + [""]
+
+    if split == "dev":
+        out += _tuning_section(dev)
     return "\n".join(out)
+
+
+def _tuning_section(dev: list[Scanned]) -> list[str]:
+    best_k, rows = pick_k(dev)
+    phishing = [r for r in dev if r.label == "phishing"]
+    ham = [r for r in dev if r.label == "ham"]
+    suggested = suggested_weights(dev, best_k)
+    out = [
+        "## Weight tuning (dev split only)",
+        "",
+        f"weight = k x ln(rate in phishing / rate in ham), add-one smoothing, rounded to 5, within {WEIGHT_RANGE[0]}..{WEIGHT_RANGE[1]}.",
+        f"Tuned: signals without era bias that fire at least {MIN_SUPPORT} times on dev; all others keep their current weight.",
+        f"k is picked for the best F1 at the phishing threshold (≥ {PHISHING_AT}) with at most {MAX_TUNING_FPR:.0%} of ham flagged phishing "
+        f"and at most {MAX_TUNING_SUSPICIOUS_FPR:.0%} flagged suspicious or worse (≥ {SUSPICIOUS_AT}), measured without era signals.",
+        "",
+        f"| k | Precision (≥ {PHISHING_AT}) | Recall (≥ {PHISHING_AT}) | F1 (≥ {PHISHING_AT}) | FP rate (≥ {PHISHING_AT}) | Recall (≥ {SUSPICIOUS_AT}) | FP rate (≥ {SUSPICIOUS_AT}) |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for k, high, low in rows:
+        mark = " (picked)" if k == best_k else ""
+        out.append(
+            f"| {k}{mark} | {high['precision']:.3f} | {high['recall']:.3f} | {high['f1']:.3f} | {high['fpr']:.3f} | {low['recall']:.3f} | {low['fpr']:.3f} |"
+        )
+    out += ["", f"| Signal | Phishing hits | Ham hits | ln ratio | Current weight | Suggested (k = {best_k}) |", "|---|---|---|---|---|---|"]
+    for signal in tunable_signals(dev):
+        out.append(
+            f"| `{signal}` | {sum(signal in r.ids for r in phishing)} | {sum(signal in r.ids for r in ham)} "
+            f"| {log_ratio(signal, phishing, ham):+.2f} | {WEIGHTS[signal]} | {suggested[signal]} |"
+        )
+    out.append("")
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
