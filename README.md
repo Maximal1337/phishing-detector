@@ -98,6 +98,36 @@ python -m phishing_detector scan samples/phishing_lookalike_sender.eml
 python -m phishing_detector scan samples/plain_phishing.txt --json
 ```
 
+### Web app with docker compose (the main local path)
+
+The app with PostgreSQL 18 and Valkey 8, as in AWS. The images are pinned by digest.
+
+```bash
+cp .env.example .env        # then set your own DB_PASSWORD (and BASIC_AUTH_* to turn on Basic auth)
+docker compose up -d --build
+docker inspect --format '{{.State.Health.Status}}' phishing-detector-app-1     # healthy
+```
+
+Open http://127.0.0.1:8000, upload a file from `samples/` or paste an email's source. A second scan of the same
+email says "from cache"; every scan appears under "History of scans". Stop with `docker compose down`
+(`down -v` also deletes the local database). Without `DB_HOST` the app keeps its history in memory instead.
+
+API: `POST /api/scan` (multipart field `email`, or form field `text`) returns the result as JSON plus `cached`;
+`GET /api/history?limit=20`; `GET /healthz` (no auth).
+
+```bash
+curl -s -F "email=@samples/phishing_spoofed_bank.eml" http://127.0.0.1:8000/api/scan
+```
+
+**Updating the dependency lock** (after changing `requirements.txt`; network on, in the same base image):
+
+```bash
+IMAGE=python:3.13.17-slim@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+docker run --rm -v "$(pwd):/src:ro" -v "$(pwd)/build:/out" $IMAGE \
+  pip install --dry-run --ignore-installed --uploaded-prior-to P7D --report /out/report.json -r /src/requirements.txt
+python scripts/lock_requirements.py build/report.json > requirements.lock
+```
+
 ### Tests
 
 ```bash
@@ -108,6 +138,9 @@ python -m venv .venv
 
 These commands were run on Linux (a `python:3.13.17-slim` container) and on Windows; CI runs them on
 `ubuntu-latest` for every push. On macOS, use the Linux commands.
+
+`tests/test_postgres.py` runs only when `TEST_DATABASE_URL` points at a PostgreSQL database, for example the compose one:
+`TEST_DATABASE_URL=postgresql://phishdet:<your DB_PASSWORD>@127.0.0.1:15432/phishdet` (it works in its own schema and drops it).
 
 ## Deploy to AWS
 
@@ -170,7 +203,17 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
 - The only IAM role in the foundation is for flow logs: it trusts `vpc-flow-logs.amazonaws.com` only for this account's flow logs and can write only to its log group.
 - Dependencies are pinned to exact versions, and each pinned version had been public for at least 7 days when it was pinned,
   so a broken or compromised release has time to be noticed and yanked before it reaches the image.
-  Transitive dependencies other than botocore are not pinned and resolve at install time.
+  The image installs from `requirements.lock`: every package, transitive ones included, pinned with the SHA-256 of
+  each of its files and installed with `pip install --require-hashes` (wheels only). The lock is generated from
+  `requirements.txt` by pip's resolver limited to releases at least 7 days old (`--uploaded-prior-to P7D`), and
+  `scripts/lock_requirements.py` checks every release's age against PyPI again before writing it (see "Run locally").
+- The web app: HTTP Basic auth on everything except `/healthz` (credentials from Secrets Manager, compared in constant
+  time; if the secret can't be read, requests are refused); uploads over 1 MB get 413; responses carry
+  `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. The page never renders email HTML: every value is set
+  with `textContent`, and links are shown defanged, never as clickable links. The container runs as UID 10001 with a
+  read-only root filesystem, no Linux capabilities and `no-new-privileges`. Logs are JSON lines with request ids,
+  status, verdict and score only, never email content.
   The 7-day rule is for third-party packages and tools. The Docker base image (`python:3.13.17-slim`, pinned by digest)
   is decided by the ECR vulnerability scan instead: if a newer `python:3.13-slim` fixes HIGH or CRITICAL findings,
   the image moves to it (again pinned by digest) without waiting.

@@ -1,0 +1,58 @@
+# Local run: the app with PostgreSQL and Valkey, as in AWS (README, "Run locally").
+# Values come from a git-ignored .env next to this file (copy .env.example).
+name: phishing-detector
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        APP_VERSION: local
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DB_HOST: db
+      DB_NAME: phishdet
+      DB_USER: phishdet
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      CACHE_URL: redis://cache:6379/0
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-}
+      BASIC_AUTH_PASSWORD: ${BASIC_AUTH_PASSWORD:-}
+    # The same restrictions as on EC2.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+
+  db:
+    image: postgres:18.4-trixie@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+    environment:
+      POSTGRES_DB: phishdet
+      POSTGRES_USER: phishdet
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-15432}:5432"  # only for tests/test_postgres.py from the host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phishdet -d phishdet"]
+      interval: 5s
+      retries: 10
+
+  cache:
+    image: valkey/valkey:8.1.11-trixie@sha256:8f836008e0986c36adf50da714c7060cf689dbb335f61fe077939d90fa650809
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  db-data:

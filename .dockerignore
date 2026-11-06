@@ -1,0 +1,6 @@
+# Allow-list: the image gets only the lock file and the two packages.
+*
+!requirements.lock
+!phishing_detector/
+!webapp/
+**/__pycache__
