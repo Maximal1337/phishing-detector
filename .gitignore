@@ -15,3 +15,6 @@ __pycache__/
 # Public email corpora downloaded for evaluation; never committed.
 # Anchored to the repo root so phishing_detector/data/ stays tracked.
 /data/
+
+# Dependency-lock working files (scripts/lock_requirements.py)
+/build/
