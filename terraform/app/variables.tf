@@ -63,3 +63,9 @@ variable "asg_max" {
   type        = number
   default     = 4
 }
+
+variable "alarm_email" {
+  description = "E-mail address for CloudWatch alarm notifications (SNS); confirm the subscription mail AWS sends."
+  type        = string
+  sensitive   = true # kept out of plan output; set it only in the git-ignored terraform.tfvars
+}

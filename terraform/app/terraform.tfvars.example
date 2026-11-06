@@ -8,6 +8,9 @@ allowed_account_ids = ["<your-12-digit-account-id>"]
 image_tag    = "<image-tag>"
 image_digest = "sha256:<image-digest>"
 
+# Where alarm notifications go (SNS e-mail; confirm the subscription mail).
+alarm_email = "<you@example.com>"
+
 # Optional overrides (defaults shown):
 # region                = "eu-north-1"
 # foundation_state_path = "../foundation/terraform.tfstate"
