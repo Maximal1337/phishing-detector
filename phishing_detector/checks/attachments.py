@@ -52,7 +52,7 @@ def _extensions(filename: str) -> list[str]:
 
 
 def _shown(attachment: Attachment) -> str:
-    name = "".join(ch for ch in attachment.filename if ch.isprintable())[:80]
+    name = "".join(ch for ch in attachment.filename if ch.isprintable())[:50]  # enough to see the trick, no more
     return name + (" (right-to-left override)" if _RTLO in attachment.filename else "")
 
 

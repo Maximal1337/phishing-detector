@@ -91,9 +91,22 @@ def url_host(url: str) -> str:
 _SCHEME = re.compile(r"^(?i:http)")
 
 
+# An email address, also percent-encoded (bob%40example.org), as kits put it into links.
+_ADDRESS = re.compile(r"[\w.+-]+(?:@|%40)[\w-]+(?:\.[\w-]+)+", re.IGNORECASE)
+# scheme://host part of a URL; addresses are removed only after it, so a userinfo trick stays visible.
+_URL_HEAD = re.compile(r"^([a-z][a-z0-9+.-]*://[^/?#]*)(.*)$", re.IGNORECASE | re.DOTALL)
+
+
+def redact_addresses(url: str) -> str:
+    """Replace email addresses in a URL's path, query and fragment with [address]."""
+    match = _URL_HEAD.match(url)
+    head, tail = match.groups() if match else ("", url)
+    return head + _ADDRESS.sub("[address]", tail)
+
+
 def defang(url: str, limit: int = 100) -> str:
-    """hxxp://evil[.]example/login - readable, but not clickable or auto-linked."""
-    text = "".join(ch for ch in url if ch.isprintable() and not ch.isspace())
+    """hxxp://evil[.]example/login - readable, but not clickable or auto-linked; no addresses."""
+    text = redact_addresses("".join(ch for ch in url if ch.isprintable() and not ch.isspace()))
     text = _SCHEME.sub("hxxp", text).replace(".", "[.]").replace("@", "[@]")
     return text if len(text) <= limit else text[: limit - 3] + "..."
 

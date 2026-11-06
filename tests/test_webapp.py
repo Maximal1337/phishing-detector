@@ -247,3 +247,13 @@ def test_rules_version_changes_with_any_rule_file(tmp_path):
     brands = copy / "data" / "brands.txt"
     brands.write_text(brands.read_text(encoding="utf-8") + "newbrand newbrand.test" + chr(10), encoding="utf-8")
     assert version.fingerprint(copy) != before
+
+
+def test_no_address_in_the_api_response_or_the_cache():
+    cache = DictCache()
+    client = _client(cache=cache)
+    raw = make_email(to="bob@example.org", text="Verify: http://192.0.2.10/login?user=bob@example.org&u2=bob%40example.org" + chr(10))
+    body = _scan(client, raw).get_json()  # the UI shows only fields of this response, via textContent
+    assert "links.recipient_in_url" in [i["id"] for i in body["indicators"]]
+    for text in (json.dumps(body), json.dumps(cache.items)):
+        assert "bob" not in text and "[address]" in text

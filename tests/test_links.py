@@ -193,3 +193,13 @@ def test_github_pages_is_github_not_a_lookalike():
     ids = {f.id for f in links.check(parsed, [])}  # the shipped brand list
     assert not ids & {"links.lookalike_domain", "links.brand_link_mismatch"}
     assert "links.abused_hosting" in ids  # still free hosting, with its own small weight
+
+
+def test_evidence_never_shows_an_address_but_the_signal_stays():
+    for url in ("http://192.0.2.10/login?user=bob@example.org", "http://192.0.2.10/p/bob%40example.org#x"):
+        found = _modern(text=f"Log in: {url}")
+        assert "links.recipient_in_url" in found
+        evidence = " ".join(found["links.ip_host"].evidence)
+        assert "[address]" in evidence and "bob" not in evidence
+    trick = _modern(text="Log in: http://examplebank.test@192.0.2.10/login")["links.userinfo"].evidence[0]
+    assert "examplebank[.]test[@]192" in trick  # the userinfo trick itself stays visible
