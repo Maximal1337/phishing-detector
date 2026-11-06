@@ -4,6 +4,12 @@
 aws_profile         = "<your-aws-cli-profile>"
 allowed_account_ids = ["<your-12-digit-account-id>"]
 
+# Printed by scripts/build_push.sh (git SHA, 12 characters).
+image_tag = "<image-tag>"
+
 # Optional overrides (defaults shown):
 # region                = "eu-north-1"
 # foundation_state_path = "../foundation/terraform.tfstate"
+# instance_type         = "t3.micro"
+# asg_min               = 2
+# asg_max               = 4

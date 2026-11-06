@@ -1,0 +1,67 @@
+#!/bin/bash
+# Boot script (cloud-init, runs once): Docker, the CloudWatch agent and the app as a systemd service.
+# Its output goes to /var/log/cloud-init-output.log, which the agent ships to ${cloud_init_group}.
+set -euo pipefail
+
+dnf install -y docker amazon-cloudwatch-agent
+systemctl enable --now docker
+
+token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+instance_id=$(curl -sf -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/instance-id)
+
+# CloudWatch agent: memory and disk use (the EC2 metrics don't have them) and the boot log.
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'JSON'
+{
+  "agent": { "metrics_collection_interval": 60 },
+  "metrics": {
+    "append_dimensions": { "InstanceId": "$${aws:InstanceId}" },
+    "metrics_collected": {
+      "mem": { "measurement": ["mem_used_percent"] },
+      "disk": { "measurement": ["used_percent"], "resources": ["/"] }
+    }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          { "file_path": "/var/log/cloud-init-output.log", "log_group_name": "${cloud_init_group}", "log_stream_name": "{instance_id}" }
+        ]
+      }
+    }
+  }
+}
+JSON
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+# Container environment: where the secrets are, never their values.
+cat > /etc/phishdet.env <<'ENV'
+%{ for key, value in app_env ~}
+${key}=${value}
+%{ endfor ~}
+ENV
+chmod 600 /etc/phishdet.env
+
+cat > /etc/systemd/system/phishdet.service <<UNIT
+[Unit]
+Description=Phishing detector web app
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/docker rm -f app
+ExecStartPre=/bin/sh -c 'aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${registry}'
+ExecStartPre=/usr/bin/docker pull ${image}
+ExecStart=/usr/bin/docker run --name app -p 8000:8000 --env-file /etc/phishdet.env \
+  --log-driver=awslogs --log-opt awslogs-region=${region} --log-opt awslogs-group=${app_log_group} --log-opt awslogs-stream=$instance_id \
+  --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges ${image}
+ExecStop=/usr/bin/docker stop app
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now phishdet

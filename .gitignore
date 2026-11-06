@@ -3,6 +3,7 @@
 *.tfstate*
 .terraform/
 *.tfvars
+*.tfplan
 
 # Local environment
 .env

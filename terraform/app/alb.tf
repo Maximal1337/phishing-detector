@@ -24,8 +24,7 @@ resource "aws_lb" "main" {
   depends_on = [aws_s3_bucket_policy.alb_logs]
 }
 
-# Placeholder until the instances exist (stage 7 switches this to forward
-# to the target group).
+# CloudFront -> ALB :80 -> the app instances.
 resource "aws_lb_listener" "http" {
   #checkov:skip=CKV_AWS_2:No domain, so no certificate for the ALB; viewer TLS ends at CloudFront. ALB certificate or VPC origin is a next step.
   #checkov:skip=CKV_AWS_103:Same reason - this listener has no TLS at all.
@@ -34,12 +33,7 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "placeholder: the app is not deployed yet"
-      status_code  = "200"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
   }
 }

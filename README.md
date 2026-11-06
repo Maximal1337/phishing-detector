@@ -201,6 +201,11 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
 - The ALB access-log bucket blocks all public access, lets only the ALB log-delivery service write under this account's prefix,
   and denies every request without TLS. That deny is the one place a policy uses `*` (all principals, all S3 actions): it only ever takes access away.
 - The only IAM role in the foundation is for flow logs: it trusts `vpc-flow-logs.amazonaws.com` only for this account's flow logs and can write only to its log group.
+- The app instances' role can pull only the app's ECR repository, read only the two app secrets (database and Basic auth),
+  and write only to the two app log groups. Two statements use `*` because the API has no resource-level permissions:
+  `ecr:GetAuthorizationToken`, and `cloudwatch:PutMetricData`, which is limited by condition to the `CWAgent` namespace.
+  Session Manager access comes from the AWS-managed `AmazonSSMManagedInstanceCore` policy (no SSH, no open ports).
+  Instances use IMDSv2 only, encrypted gp3 volumes and no public IP; the container gets only where the secrets are, never their values.
 - Dependencies are pinned to exact versions, and each pinned version had been public for at least 7 days when it was pinned,
   so a broken or compromised release has time to be noticed and yanked before it reaches the image.
   The image installs from `requirements.lock`: every package, transitive ones included, pinned with the SHA-256 of
@@ -246,6 +251,8 @@ Each finding below is skipped in the code with an inline comment, for the reason
 | CKV_AWS_374 | CloudFront | Reviewers may be anywhere; Basic auth limits access instead of geography. |
 | CKV_AWS_305 | CloudFront | The origin is an application that serves its own root path. |
 | CKV_AWS_150 | ALB | No deletion protection, so `terraform destroy` works. |
+| CKV_AWS_341 | Launch template | IMDS hop limit 2, so the container (one hop behind the Docker bridge) can get the instance role's credentials; IMDSv2 tokens are required. |
+| CKV_AWS_378 | Target group | HTTP from the ALB to the instances, inside the VPC; TLS on this hop is a next step together with a domain. |
 | CKV_AWS_145 | ALB log bucket | ALB access logs support only SSE-S3, not KMS. |
 | CKV_AWS_18, CKV_AWS_21, CKV_AWS_144, CKV2_AWS_62 | ALB log bucket | It is the log bucket itself: no access log of it, no versioning or replica for 7-day logs, no event consumers. |
 

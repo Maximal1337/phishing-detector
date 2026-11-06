@@ -15,3 +15,18 @@ output "alb_logs_bucket" {
 output "nat_public_ip" {
   value = aws_eip.nat.public_ip
 }
+
+output "asg_name" {
+  description = "Auto Scaling group of the app instances."
+  value       = aws_autoscaling_group.app.name
+}
+
+output "app_log_group" {
+  description = "CloudWatch log group with the app's JSON log lines."
+  value       = aws_cloudwatch_log_group.app.name
+}
+
+output "image_tag" {
+  description = "Image tag the instances run."
+  value       = var.image_tag
+}

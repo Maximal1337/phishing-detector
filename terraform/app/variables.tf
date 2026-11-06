@@ -27,3 +27,30 @@ variable "log_retention_days" {
   type        = number
   default     = 7
 }
+
+variable "image_tag" {
+  description = "Tag of the app image in ECR (the git SHA printed by scripts/build_push.sh)."
+  type        = string
+  validation {
+    condition     = can(regex("^[0-9a-f]{12}$", var.image_tag))
+    error_message = "Use the 12-character git SHA that scripts/build_push.sh pushed."
+  }
+}
+
+variable "instance_type" {
+  description = "EC2 instance type for the app (t3.small if t3.micro runs out of memory)."
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "asg_min" {
+  description = "Minimum (and initial) number of app instances, one per Availability Zone."
+  type        = number
+  default     = 2
+}
+
+variable "asg_max" {
+  description = "Maximum number of app instances when scaling out."
+  type        = number
+  default     = 4
+}
