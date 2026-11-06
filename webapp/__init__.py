@@ -166,12 +166,15 @@ def create_app(
         sha256 = hashlib.sha256(raw).hexdigest()  # the same id the detector reports
         key = f"{rules_version}:{sha256}"  # another detector version never reuses this entry
         def cache_failed(exc: Exception) -> None:  # the cache is an optimisation: carry on without it
-            log_event("cache_failed", error=type(exc).__name__, request_id=g.request_id)
+            event = "cache_decode_failed" if isinstance(exc, ValueError) else "cache_failed"
+            log_event(event, error=type(exc).__name__, request_id=g.request_id)
 
         try:
             if data := cache.get(f"static:{key}"):
                 static, cached = StaticAnalysis.from_dict(data), True
-        except Exception as exc:
+        except (KeyError, TypeError, AttributeError) as exc:  # an entry this version can't read is a miss
+            cache_failed(ValueError(type(exc).__name__))
+        except Exception as exc:  # json.JSONDecodeError is a ValueError -> cache_decode_failed
             cache_failed(exc)
         if static is None:
             static = analyze_static(raw)

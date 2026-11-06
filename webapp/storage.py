@@ -171,11 +171,7 @@ class ReputationHistory:
         return f"flag:{self.rules_version}:{sender_domain}"
 
     def count_trusted_flags(self, sender_domain: str, exclude_sha256: str) -> int:
-        try:
-            mark = self.cache.get(self._key(sender_domain)) or []
-        except Exception as exc:
-            self.on_cache_error(exc)
-            mark = []
+        mark = self._mark(sender_domain)
         others = [sha for sha in mark if sha != exclude_sha256]  # an email never flags itself
         if others:
             return len(others)
@@ -195,8 +191,19 @@ class ReputationHistory:
             except Exception as exc:
                 self.on_cache_error(exc)
 
+    def _mark(self, sender_domain: str) -> list[str]:
+        """The SHA-256s in the mark; [] if there is none, the cache fails or the entry can't be read."""
+        try:
+            mark = self.cache.get(self._key(sender_domain)) or []
+            if not (isinstance(mark, list) and all(isinstance(s, str) and len(s) == 64 for s in mark)):
+                raise ValueError("unexpected mark format")  # reported as cache_decode_failed, then a miss
+            return mark
+        except Exception as exc:
+            self.on_cache_error(exc)
+            return []
+
     def _add(self, sender_domain: str, shas: list[str]) -> None:
         key = self._key(sender_domain)
         # Read-modify-write: two instances at once can drop a SHA from the mark, never add a wrong one.
-        merged = list(dict.fromkeys([*shas, *(self.cache.get(key) or [])]))[:FLAG_SHAS]
+        merged = list(dict.fromkeys([*shas, *self._mark(sender_domain)]))[:FLAG_SHAS]
         self.cache.set(key, merged, FLAG_TTL_SECONDS)

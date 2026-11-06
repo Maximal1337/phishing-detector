@@ -1,6 +1,7 @@
 """The web app with in-memory stores: auth, limits, headers, history, cache and store failures."""
 
 import base64
+import hashlib
 import io
 import json
 import re
@@ -374,3 +375,29 @@ def test_same_scans_give_the_same_verdicts_through_valkey_and_through_the_databa
 
 def _rules_version(client):
     return client.get("/api/version", headers=AUTH).get_json()["rules_version"]
+
+
+
+def test_an_entry_this_version_cannot_read_is_a_miss(capsys):
+    cache = DictCache()
+    client = _client(cache=cache)
+    raw = (SAMPLES / "phishing_spoofed_bank.eml").read_bytes()
+    key = f"static:{_rules_version(client)}:{hashlib.sha256(raw).hexdigest()}"
+    cache.items[key] = {"verdict": "phishing", "score": 100, "indicators": []}  # an older full-result format
+    body = _scan(client, raw).get_json()
+    assert body["cached"] is False and body["verdict"] == "phishing" and body["indicators"]
+    assert "static:" in json.dumps(list(cache.items)) and cache.items[key].get("findings")  # rewritten in the current format
+    cache.items[f"flag:{_rules_version(client)}:{SHOP}"] = {"not": "a list"}
+    assert not _flagged(_scan(client, _shop_mail("legit")).get_json())
+    events = [json.loads(line)["event"] for line in capsys.readouterr().out.splitlines()]
+    assert events.count("cache_decode_failed") >= 2 and "cache_failed" not in events
+
+
+def test_undecodable_bytes_in_valkey_are_a_miss(capsys):
+    class GarbageCache(DictCache):
+        def get(self, key):
+            return json.loads("{not json")  # what ValkeyCache.get raises on a corrupt value
+
+    body = _scan(_client(cache=GarbageCache()), (SAMPLES / "legit_receipt.eml").read_bytes()).get_json()
+    assert body["cached"] is False and body["verdict"] == "likely_legitimate"
+    assert '"event": "cache_decode_failed"' in capsys.readouterr().out

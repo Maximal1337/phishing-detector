@@ -125,11 +125,14 @@ resource "aws_autoscaling_group" "app" {
     version = aws_launch_template.app.latest_version
   }
 
-  # A changed launch template (new image tag, new AMI) replaces the instances one batch at a time.
+  # A changed launch template (new image, new AMI) replaces the instances: launch first, then terminate.
+  # With 100 / 200 % the group adds new instances up to twice its size, waits until they are healthy and
+  # warmed up, and only then stops old ones, so capacity never drops below the two instances.
   instance_refresh {
     strategy = "Rolling"
     preferences {
-      min_healthy_percentage = 50
+      min_healthy_percentage = 100
+      max_healthy_percentage = 200
       instance_warmup        = 120
     }
   }

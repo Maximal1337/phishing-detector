@@ -191,6 +191,14 @@ during the first apply, and the first launches can fail with "Access denied when
 propagated. The group retries by itself a minute later, but Terraform marks it as tainted. Then run
 `terraform untaint aws_autoscaling_group.app` and apply again; the role stays in the account afterwards.
 
+**Rollout and rollback.** `build_push.sh` → new `image_tag` and `image_digest` in `terraform.tfvars` → plan → apply.
+The new launch template version starts an instance refresh with `min_healthy_percentage = 100` and
+`max_healthy_percentage = 200`: new instances are launched first and the old ones stopped only once the new ones are
+healthy and warmed up, so the site never runs on fewer than two instances (with the default "terminate first", one
+instance would carry all traffic for minutes, and a bad image would be found only after half the capacity was gone).
+A rollback is the same path with the previous tag and digest. Both versions share Valkey: a cache entry one version
+can't read counts as a miss (logged as `cache_decode_failed`), never as an error.
+
 ## Invoke
 
 _Using the web UI and the HTTP API on the deployed stack._
