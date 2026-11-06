@@ -168,6 +168,9 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
 - Dependencies are pinned to exact versions, and each pinned version had been public for at least 7 days when it was pinned,
   so a broken or compromised release has time to be noticed and yanked before it reaches the image.
   Transitive dependencies other than botocore are not pinned and resolve at install time.
+  The 7-day rule is for third-party packages and tools. The Docker base image (`python:3.13.17-slim`, pinned by digest)
+  is decided by the ECR vulnerability scan instead: if a newer `python:3.13-slim` fixes HIGH or CRITICAL findings,
+  the image moves to it (again pinned by digest) without waiting.
 
 ### Scanner findings that are not fixed
 
