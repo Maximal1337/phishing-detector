@@ -24,6 +24,10 @@ EXPECTED = {
     "legit_newsletter.eml": "likely_legitimate",
     "legit_receipt.eml": "likely_legitimate",
     "legit_internal.eml": "likely_legitimate",
+    # Modern legitimate patterns that the newer link and HTML signals could misjudge.
+    "legit_modern_newsletter.eml": "likely_legitimate",  # hidden preheader, third-party click tracker
+    "legit_shared_document.eml": "likely_legitimate",  # "Open document" button
+    "legit_mfa_code.eml": "likely_legitimate",  # sign-in code
     "plain_phishing.txt": "phishing",
     "plain_legit.txt": "likely_legitimate",
 }
@@ -103,3 +107,12 @@ def test_unavailable_history_never_gives_a_milder_verdict(name):
     down = _RANK[_scan(name, history=_Unavailable()).verdict]
     assert down >= _RANK[_scan(name, history=_NoFlags()).verdict]
     assert down >= _RANK[_scan(name, history=_AlwaysFlagged()).verdict]
+
+
+MODERN_LEGIT = ["legit_modern_newsletter.eml", "legit_shared_document.eml", "legit_mfa_code.eml"]
+
+
+@pytest.mark.parametrize("name", MODERN_LEGIT)
+def test_modern_legitimate_mail_stays_below_suspicious(name):
+    """No single modern-mail pattern (tracker, document button, hidden preheader) may make a mail suspicious."""
+    assert _scan(name).score < 25

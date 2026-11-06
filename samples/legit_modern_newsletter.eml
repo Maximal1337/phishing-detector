@@ -1,0 +1,43 @@
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=bounce.esp.example.net; dkim=pass header.d=example.org; dmarc=pass header.from=example.org
+Received: from mta7.esp.example.net (mta7.esp.example.net [198.51.100.77]) by mx.example.com; Thu, 05 Nov 2026 06:30:00 +0000
+Return-Path: <bounce-1234@bounce.esp.example.net>
+From: Example News <newsletter@example.org>
+To: reader@example.com
+Subject: Weekend reading from Example News: budget, trams and a long interview
+Date: Thu, 05 Nov 2026 06:29:41 +0000
+Message-ID: <20261105062941.1111@esp.example.net>
+List-Unsubscribe: <https://esp.example.net/unsubscribe?list=news&email=reader%40example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="sample-11"
+
+--sample-11
+Content-Type: text/plain; charset=utf-8
+
+Weekend reading from Example News
+
+The city council published next year's budget:
+https://click.esp.example.net/ls/click?upn=a1B2c3&url=https%3A%2F%2Fwww.example.org%2Fnews%2F2026%2Fcity-budget
+
+The new tram line opens in March:
+https://click.esp.example.net/ls/click?upn=d4E5f6&url=https%3A%2F%2Fwww.example.org%2Fnews%2F2026%2Ftram-line
+
+Unsubscribe: https://esp.example.net/unsubscribe?list=news&email=reader%40example.com
+
+--sample-11
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<div style="display:none;max-height:0;overflow:hidden">The budget, the new tram line and a long interview.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+<table><tr><td><img src="https://cdn.esp.example.net/logo.png" alt="Example News"></td></tr>
+<tr><td style="font-size:0;line-height:0">&nbsp;</td></tr>
+<tr><td>
+<h1>Weekend reading</h1>
+<p>The city council published next year's budget.
+<a href="https://click.esp.example.net/ls/click?upn=a1B2c3&amp;url=https%3A%2F%2Fwww.example.org%2Fnews%2F2026%2Fcity-budget">Read the article</a></p>
+<p>The new tram line opens in March.
+<a href="https://click.esp.example.net/ls/click?upn=d4E5f6&amp;url=https%3A%2F%2Fwww.example.org%2Fnews%2F2026%2Ftram-line">Read the article</a></p>
+<p><a href="https://esp.example.net/unsubscribe?list=news&amp;email=reader%40example.com">Unsubscribe</a></p>
+</td></tr></table>
+</body></html>
+
+--sample-11--

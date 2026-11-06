@@ -1,0 +1,32 @@
+Authentication-Results: mx.example.com; spf=pass smtp.mailfrom=docs.example.com; dkim=pass header.d=docs.example.com; dmarc=pass header.from=docs.example.com
+Received: from mail.docs.example.com (mail.docs.example.com [203.0.113.60]) by mx.example.com; Thu, 05 Nov 2026 11:02:00 +0000
+From: "Dana Levi (via Example Docs)" <shares-noreply@docs.example.com>
+Reply-To: Dana Levi <dana@example.com>
+To: bob@example.com
+Subject: Document shared with you: "Q4 planning"
+Date: Thu, 05 Nov 2026 11:01:37 +0000
+Message-ID: <20261105110137.1212@docs.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="sample-12"
+
+--sample-12
+Content-Type: text/plain; charset=utf-8
+
+Dana Levi shared a document with you.
+
+Q4 planning
+https://docs.example.com/document/d/1AbCdEfGh/edit?usp=sharing_eil
+
+You received this email because Dana Levi shared a document with you from Example Docs.
+
+--sample-12
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Dana Levi shared a document with you.</p>
+<p><strong>Q4 planning</strong></p>
+<p><a href="https://docs.example.com/document/d/1AbCdEfGh/edit?usp=sharing_eil">Open document</a></p>
+<p style="color:#777">You received this email because Dana Levi shared a document with you from Example Docs.</p>
+</body></html>
+
+--sample-12--
