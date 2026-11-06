@@ -11,6 +11,8 @@ _Input formats, the indicator families, how the risk score and verdict are compu
 
 The detector (`phishing_detector/`, Python standard library only) reads one email and reports whether it is likely phishing and why.
 It is rule-based: every point of the score comes from a named indicator with its evidence, and each rule has its own tests.
+The priority is precision: when it says "phishing" it should be right, even if that means missing phishing that has no
+visible tell; "suspicious" is the level that trades some false alarms for more catches.
 
 **Input.** A raw email with headers (`.eml`, or a text file in that format), or just the body text.
 For body-only input the authentication, sender and history checks are skipped, and the result says so.
@@ -21,7 +23,8 @@ For body-only input the authentication, sender and history checks are skipped, a
 |---|---|
 | Authentication | SPF, DKIM and DMARC results from the topmost `Authentication-Results` header only; the lower ones can be written by the sender. A missing header is neutral. |
 | Sender | Display name that shows another domain's address or names a brand the mail doesn't come from; sender domain that imitates a protected brand (homoglyphs such as `examp1ebank`, `exarnplebank` or Cyrillic letters, small edit distance, brand plus extra words); punycode; Reply-To or Return-Path at another domain. |
-| Links | Bare IP hosts; link text that shows another domain than the link; lookalike domains; a brand in front of an unrelated domain (`examplebank.test.login.example.net`); punycode; `user@host` tricks; `javascript:`/`data:` URLs; password fields in the email; often-abused TLDs; URL shorteners; unusual ports. |
+| Links | Bare IP hosts; link text that shows another domain than the link; lookalike domains; a brand in front of or in the path of an unrelated domain (`examplebank.test.login.example.net`, `files.example.net/examplebank/`); a brand named in the mail with no link to it; the recipient's address in a link (also base64-encoded), as phishing kits use to pre-fill a fake login; redirect parameters and AMP pages; free hosting, storage and form services; "Sign in" / "View document" buttons; punycode; `user@host` tricks; `javascript:`/`data:` URLs; password fields in the email; often-abused TLDs; URL shorteners; unusual ports. |
+| HTML tricks | A lot of text hidden with CSS (a short hidden preview line is normal); invisible characters inside words; a mail that is just an image with a link. |
 | Wording | Urgency, threats, credential requests, payment pressure, prize bait and generic greetings, each counted once. |
 | Attachments | From MIME metadata only: programs and scripts, macro-enabled Office files, HTML/SVG files, archives and disk images, double extensions and the right-to-left override trick, a harmless declared type on a risky file, an archive password in the text. |
 | History | Earlier phishing verdicts for the same sender domain (web app only, see below). |
@@ -291,9 +294,12 @@ The report goes to standard output; it contains only counts, metrics and signal 
 
 _What would come next with more time._
 
-- Detector: a modern legitimate corpus (same era as the phishing) to tune all signals, including `auth.*`, and to measure
-  false positives on transactional mail; learning the weights with logistic regression over the same rules (still one
-  readable weight per rule); an optional URL-reputation lookup for the links that no static rule flags.
+- Detector, beyond static rules:
+  - URL reputation for links that no rule flags ([Google Safe Browsing](https://developers.google.com/safe-browsing),
+    [URLhaus](https://urlhaus.abuse.ch/)), sending only the URL, never the email;
+  - domain age from [RDAP](https://about.rdap.org/): phishing domains are often days old;
+  - machine learning on modern labelled data (phishing and legitimate mail of the same era, with headers),
+    starting with logistic regression over these same rules so each rule keeps one readable weight.
 
 - A NAT gateway in each Availability Zone, each app subnet routed to the one in its own zone
   (about $1.22 per day per extra NAT gateway with its public IPv4 address).
