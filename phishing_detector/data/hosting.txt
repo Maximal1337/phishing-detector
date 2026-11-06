@@ -1,0 +1,27 @@
+# Free hosting, file storage and form services that phishing pages are often put on.
+# Legitimate sites use them too, so this is a weak signal on its own.
+# A plain line matches that host and every subdomain of it;
+# "host/path" matches that host when the URL path starts with that path.
+web.app
+firebaseapp.com
+firebasestorage.googleapis.com
+storage.googleapis.com
+pages.dev
+workers.dev
+r2.dev
+netlify.app
+vercel.app
+github.io
+glitch.me
+ngrok.io
+ngrok.app
+ngrok-free.app
+blob.core.windows.net
+wixsite.com
+weebly.com
+ipfs.io
+dweb.link
+forms.gle
+docs.google.com/forms
+sites.google.com
+forms.office.com

@@ -78,3 +78,64 @@ def test_links_in_body_only_text_are_checked_too():
 def test_ordinary_links_raise_nothing():
     html = _anchor("https://www.example.org/news/1", "Read more") + _anchor("https://example.org/unsubscribe", "Unsubscribe")
     assert _found(html=html) == {}
+
+
+# --- signals added for modern phishing (reserved names; test-only hosting list) ---
+
+TEST_HOSTING = [("pages.test", ""), ("forms.example.com", "/forms")]
+
+
+def _modern(text=None, html=None, from_="Alice <alice@example.com>", subject="Quarterly planning notes", to="bob@example.org"):
+    parsed = parsed_email(text=text, html=html, from_=from_, subject=subject, to=to)
+    return {f.id: f for f in links.check(parsed, [], hosting=TEST_HOSTING, **TEST_LISTS)}
+
+
+def test_brand_in_the_path_of_another_domain():
+    assert "links.brand_in_path" in _modern(text="See http://files.example.net/examplebank/login now")
+    assert "links.brand_in_path" not in _modern(text="See https://examplebank.test/examplebank/login now")
+    assert "links.brand_in_path" not in _modern(text="See http://files.example.net/reports/2026 now")
+
+
+def test_brand_named_but_no_link_to_it():
+    found = _modern(text="Your ExampleBank account needs attention: http://portal.example.net/start")
+    assert found["links.brand_link_mismatch"].evidence == ("names examplebank, links go elsewhere",)
+    assert "links.brand_link_mismatch" not in _modern(text="Your ExampleBank account: https://examplebank.test/start")
+    assert "links.brand_link_mismatch" not in _modern(text="Your ExampleBank statement is ready.")  # no links at all
+    assert "links.brand_link_mismatch" not in _modern(text="News: http://portal.example.net/", from_="E <a@examplebank.test>")
+
+
+def test_recipient_address_in_a_link():
+    plain = _modern(text="Log in: http://portal.example.net/login?user=bob@example.org")
+    assert plain["links.recipient_in_url"].evidence == ("link to portal[.]example[.]net",)  # host only, never the address
+    encoded = "Ym9iQGV4YW1wbGUub3Jn"  # base64 of the recipient's address
+    assert "links.recipient_in_url" in _modern(text=f"Log in: http://portal.example.net/start#{encoded}")
+    assert "links.recipient_in_url" in _modern(text="Log in: http://portal.example.net/p?e=bob%40example.org")
+    assert "links.recipient_in_url" not in _modern(text="Unsubscribe: https://news.example.org/unsubscribe?email=bob@example.org")
+    assert "links.recipient_in_url" not in _modern(text="Log in: http://portal.example.net/login?lang=en")
+
+
+def test_redirect_parameters_and_amp():
+    found = _modern(text="Open http://www.example.com/url?q=http://evil.example.net/login&sa=D")
+    assert found["links.redirect_param"].evidence == ("www[.]example[.]com forwards to evil[.]example[.]net",)
+    assert "links.redirect_param" in _modern(text="Open https://track.example.org/c?redirect=https%3A%2F%2Fevil.example.net%2F")
+    assert "links.redirect_param" in _modern(text="Open https://example-com.cdn.ampproject.org/c/s/evil.example.net/")
+    # A tracker that forwards to its own site, and a search link, are not redirects to elsewhere.
+    assert "links.redirect_param" not in _modern(text="Open https://click.example.org/t?url=https://www.example.org/article")
+    assert "links.redirect_param" not in _modern(text="Open https://search.example.com/find?q=http://example.net/")
+
+
+def test_abused_hosting_and_form_services():
+    assert _modern(text="Open https://secure-login.pages.test/")["links.abused_hosting"].evidence == ("secure-login[.]pages[.]test",)
+    assert "links.abused_hosting" in _modern(text="Open https://forms.example.com/forms/d/e/abc/viewform")
+    assert "links.abused_hosting" in _modern(text="Open https://gateway.example.net/ipfs/bafybeigdyrzt5")
+    assert "links.abused_hosting" not in _modern(text="Open https://forms.example.com/calendar")
+    assert "links.abused_hosting" not in _modern(text="Open https://www.example.org/")
+
+
+def test_call_to_action_link_text():
+    assert _modern(html=_anchor("https://portal.example.net/", "Sign in now"))["links.cta_text"].evidence == ('"sign in"',)
+    assert "links.cta_text" in _modern(html=_anchor("https://portal.example.net/", "View shared document"))
+    assert "links.cta_text" in _modern(html=_anchor("https://portal.example.net/", "Verify your account"))
+    assert "links.cta_text" not in _modern(html=_anchor("https://portal.example.net/", "Read the full article"))
+    long_text = "Sign in to the conference wiki to find the slides from every talk of the day"
+    assert "links.cta_text" not in _modern(html=_anchor("https://portal.example.net/", long_text))

@@ -59,6 +59,13 @@ ERA_SIGNALS = {
     "sender.punycode": "internationalised domain names (punycode) only started in 2003",
     "links.risky_tld": "most of the listed top-level domains (.xyz, .top, .zip, ...) didn't exist before 2014",
     "links.shortener": "most of the listed URL shorteners (bit.ly, t.co, ...) started after 2008",
+    # Added in the second iteration (modern phishing); hand-set, cautious weights.
+    "links.abused_hosting": "the listed hosting, storage and form services didn't exist in 2002",
+    "links.redirect_param": "tracking redirects in links are far more common in today's mail than in 2002 mailing lists",
+    "links.cta_text": "needs HTML links; only about 5 % of the 2002 ham is HTML",
+    "content.hidden_text": "needs HTML; only about 5 % of the 2002 ham is HTML",
+    "content.zero_width": "needs HTML or Unicode-heavy text, both rare in the 2002 ham",
+    "content.image_only": "needs HTML; only about 5 % of the 2002 ham is HTML",
 }
 VARIANTS = {
     "all signals": frozenset(),

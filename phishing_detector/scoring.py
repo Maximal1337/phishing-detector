@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .checks import attachments, auth, links, sender, wording
+from .checks import attachments, auth, content, links, sender, wording
 from .checks import history as history_check
 from .checks.history import HistoryStore
 from .models import Finding, Indicator, ParsedEmail, Result
 from .parser import parse
 
 # Weights marked "tuned" come from scripts/evaluate.py on the dev split of the
-# public corpora (k = 10; see the Evaluation section of the README). The others
+# public corpora (k = 6; see the Evaluation section of the README). The others
 # are hand-set: too few hits on that data, or era signals it can't judge.
 WEIGHTS: dict[str, int] = {
     # Authentication-Results (topmost header only); era signals, hand-set
@@ -25,16 +25,16 @@ WEIGHTS: dict[str, int] = {
     "auth.dmarc_fail": 25,
     "auth.dmarc_pass": 0,  # not suspicious; recorded because the history check trusts it
     # Sender
-    "sender.display_name_address": 20,  # tuned
-    "sender.brand_mismatch": 40,  # tuned
+    "sender.display_name_address": 15,  # tuned
+    "sender.brand_mismatch": 30,  # tuned
     "sender.lookalike_domain": 35,
     "sender.punycode": 20,
     "sender.reply_to_mismatch": 0,  # tuned: more common in legitimate mailing-list mail than in phishing
     "sender.return_path_mismatch": 0,  # tuned: same, bounce addresses of mailing services
     # Links
     "links.ip_host": 30,
-    "links.text_href_mismatch": 20,  # tuned
-    "links.lookalike_domain": 25,  # tuned
+    "links.text_href_mismatch": 10,  # tuned
+    "links.lookalike_domain": 15,  # tuned
     "links.brand_in_subdomain": 30,
     "links.punycode": 20,
     "links.userinfo": 25,
@@ -42,22 +42,32 @@ WEIGHTS: dict[str, int] = {
     "links.password_form": 35,
     "links.risky_tld": 15,
     "links.shortener": 10,
-    "links.nonstandard_port": 5,  # tuned
+    "links.nonstandard_port": 0,  # tuned
+    "links.brand_in_path": 15,  # tuned
+    "links.brand_link_mismatch": 5,  # tuned
+    "links.recipient_in_url": 20,  # tuned
+    "links.redirect_param": 10,  # hand-set, era-biased: newsletters use tracking redirects
+    "links.abused_hosting": 20,  # hand-set, era-biased: legitimate sites use these services too
+    "links.cta_text": 10,  # hand-set, era-biased: legitimate notices have such buttons
     # Wording (each category counts once)
-    "wording.urgency": 20,  # tuned
-    "wording.threat": 30,  # tuned
-    "wording.credentials": 40,  # tuned
-    "wording.payment": 40,  # tuned
+    "wording.urgency": 10,  # tuned
+    "wording.threat": 15,  # tuned
+    "wording.credentials": 25,  # tuned
+    "wording.payment": 25,  # tuned
     "wording.prize": 0,  # tuned: more common in legitimate mail than in phishing on this data
-    "wording.generic_greeting": 40,  # tuned
+    "wording.generic_greeting": 30,  # tuned
     # Attachments (MIME metadata only)
     "attach.executable": 40,
     "attach.double_extension": 35,
     "attach.macro_office": 30,
-    "attach.html": 40,  # tuned
+    "attach.html": 25,  # tuned
     "attach.type_mismatch": 25,
     "attach.password_hint": 15,
     "attach.archive": 10,
+    # HTML tricks
+    "content.hidden_text": 15,  # hand-set, era-biased
+    "content.zero_width": 20,  # hand-set, era-biased: rare in legitimate mail
+    "content.image_only": 10,  # hand-set, era-biased
     # History of earlier scans
     "history.domain_flagged": 20,
 }
@@ -75,7 +85,7 @@ Check = Callable[[ParsedEmail, list[str]], list[Finding]]
 
 # Checks that need the message headers, and checks that work on any input.
 EMAIL_CHECKS: list[Check] = [auth.check, sender.check]
-CONTENT_CHECKS: list[Check] = [links.check, wording.check, attachments.check]
+CONTENT_CHECKS: list[Check] = [links.check, wording.check, attachments.check, content.check]
 
 
 def verdict_for(score: int) -> str:
