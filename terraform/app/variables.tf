@@ -71,7 +71,7 @@ variable "alarm_email" {
 }
 
 variable "requests_per_target_per_minute" {
-  description = "Scaling target: requests per minute per instance (measured: about 26 req/s per t3.micro at p95 under 1 s; 60 % of that)."
+  description = "Scaling target: requests per minute per instance (60 % of the ~121 req/s each t3.micro served with the pool and 2 x 4 threads)."
   type        = number
-  default     = 900
+  default     = 4400
 }

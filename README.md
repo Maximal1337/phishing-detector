@@ -366,7 +366,7 @@ _What the detector and the infrastructure do not cover._
     analysis takes 3 ms at the median and 14 ms at the 95th percentile on corpus mail (15 synthetic samples: 1.7 / 4.3 ms);
     a cache read in compose takes 0.07 ms. Byte-identical repeats are rare too: the mails of one campaign differ in
     recipient, links and tracking ids, so each has its own SHA-256. It is the pattern a slower detector (URL reputation,
-    a model) would need.
+    a model) would need. Under load the measured benefit is 8-13 ms per repeated scan on the server (cached p50 12 vs 20 ms with the pool, 27 vs 39 ms with threads; see "Performance and scaling").
   - **Domain reputation** (`flag:<rules version>:<domain>`, 7 days): the SHA-256s of up to five emails that flagged a
     sender domain under the poisoning rule, written only after the scan row is committed to PostgreSQL. This one serves
     campaigns (many different mails from one flagged domain) and resilience: while the database is down, a known-bad
@@ -466,6 +466,46 @@ docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --securit
 
 Run it from the repository root (in Git Bash on Windows, set `MSYS_NO_PATHCONV=1` first).
 The report goes to standard output; it contains only counts, metrics and signal ids.
+
+## Performance and scaling
+
+Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront: scans only, 80 % unique emails and
+20 % repeats, one minute per step, two t3.micro instances, no scaling. Client times include about 80 ms of network.
+
+| | Before (sync, new DB connection per call) | + connection pool | + 2 workers × 4 threads (gthread) |
+|---|---|---|---|
+| Requests/s at 5 / 10 / 20 / 30 / 50 concurrent | 33 / 53 / 53 / 52 / 52 | 48 / 96 / 124 / 96 / 137 | 47 / 91 / 163 / 217 / **243** |
+| Client p50 / p95 at 10 concurrent | 177 / 274 ms | 102 / 120 ms | 107 / 135 ms |
+| Client p95 at 50 concurrent | 1932 ms | 554 ms | **324 ms** |
+| Errors | 0 | 504 from 20 concurrent (66 in all) | **0** |
+| Server time, uncached p50 / p95 | 68 / 95 ms | 20 / 31 ms | 39 / 95 ms |
+| Server time, cached p50 / p95 | 59 / 87 ms | 12 / 24 ms | 27 / 81 ms |
+| CPU, RDS (max) / app instances (max) | 63 % / 42 % | 33 % / 41 % | 62 % / 72 % |
+
+- **How the monitoring led to the cause.** In the first run throughput stopped at 52 requests/s while the app
+  instances were at 42 % CPU and RDS at 63 %: the app wasn't busy, the database was. Every history call opened a new
+  TLS connection, and PostgreSQL starts a new process for each. A small pool per worker (psycopg_pool, opened after
+  gunicorn forks) cut the server time to a third and RDS CPU in half. The next limit was the two synchronous workers
+  per instance waiting on the network; four threads per worker roughly doubled throughput again, at the cost of more
+  CPU per request (threads share the CPU and the database). Server time grows with load in the last column because
+  requests now wait on RDS together; at 243 requests/s RDS is back at 62 % and is the next limit.
+- **The 504s in the middle run** were the load balancer failing to open TCP connections to the instances
+  (`TargetConnectionErrorCount` matched them minute by minute). A repeat at 20 concurrent requests had none, and the
+  instances' ENA allowance counters (`conntrack_allowance_exceeded` and the bandwidth and packet allowances) and the
+  container's listen-queue overflow counters didn't move, so the cause wasn't confirmed. With threads and keep-alive
+  connections, all steps ran without an error and those counters stayed at 0.
+- **Keep-alive.** gunicorn keeps idle connections open for 75 seconds, longer than the load balancer's 60-second idle
+  timeout, so the load balancer always closes an idle connection first. The other way round, the load balancer may send
+  a request on a connection gunicorn is just closing, and the viewer gets a 502.
+- **Scaling** is target tracking on requests per target (`ALBRequestCountPerTarget`, one-minute load balancer metric),
+  aiming at 4400 requests per minute per instance: 60 % of the about 121 requests/s each instance served in the last
+  run (the client's 50 concurrent requests didn't reach the instances' limit). Not CPU, because the bottleneck is the
+  workers waiting on PostgreSQL and Valkey, which doesn't show as CPU (42 % in the first run while requests queued);
+  without detailed monitoring the EC2 CPU metric arrives every 5 minutes, so scaling would lag by 10-15 minutes; and CPU
+  above the t3 baseline costs extra in unlimited mode. Terraform sets the group's minimum (2) and maximum (4) and ignores
+  its desired count (`ignore_changes = [desired_capacity]`): the policy owns the number of instances, and a plan after a
+  scale-out doesn't pull the group back to two.
+- **Next steps:** once RDS is the limit, a larger instance class or RDS Proxy; more instances alone won't help then.
 
 ## Screenshots
 
