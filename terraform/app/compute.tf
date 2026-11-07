@@ -161,7 +161,8 @@ resource "aws_autoscaling_group" "app" {
   }
 
   lifecycle {
-    # The scaling policy (stage 8) changes the desired count; don't fight it on every apply.
+    # The scaling policy (scaling.tf) owns the instance count; Terraform sets only min and max,
+    # so a plan after a scale-out doesn't pull the group back to two.
     ignore_changes = [desired_capacity]
   }
 }

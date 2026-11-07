@@ -69,3 +69,9 @@ variable "alarm_email" {
   type        = string
   sensitive   = true # kept out of plan output; set it only in the git-ignored terraform.tfvars
 }
+
+variable "requests_per_target_per_minute" {
+  description = "Scaling target: requests per minute per instance (measured: about 26 req/s per t3.micro at p95 under 1 s; 60 % of that)."
+  type        = number
+  default     = 900
+}
