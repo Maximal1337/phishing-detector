@@ -34,7 +34,7 @@ jobs:
           --health-retries 30
     env:
       # With this set the PostgreSQL tests run (or fail); they skip only when it's missing.
-      TEST_DATABASE_URL: postgresql://phishdet:ci-only@localhost:5432/phishdet
+      TEST_DATABASE_URL: postgresql://phishdet:ci-only@127.0.0.1:5432/phishdet
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

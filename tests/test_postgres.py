@@ -63,7 +63,9 @@ def test_pool_reuses_its_connection_and_reconnects_after_a_drop():
 
     from webapp.credentials import DatabasePool
 
-    pool = DatabasePool(conninfo_to_dict(URL), timeout=5)
+    # One connection only: psycopg_pool hands out connections first in, first out and grows when a
+    # client has to wait, so with two the second checkout may get the other one (a flaky check).
+    pool = DatabasePool(conninfo_to_dict(URL), max_size=1, timeout=5)
     with pool.connection() as conn:
         first = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
     with pool.connection() as conn:
