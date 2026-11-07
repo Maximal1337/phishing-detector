@@ -82,10 +82,11 @@ class MemoryHistory:
 
 
 class PostgresHistory:
-    """History in the `scans` table. One short connection per call: simple, and enough for this load."""
+    """History in the `scans` table. `connect()` returns a connection context: from the per-worker pool
+    in the app (webapp.credentials.DatabasePool), or a plain psycopg connection in tests."""
 
     def __init__(self, connect: Callable) -> None:
-        self._connect = connect  # returns a new psycopg connection
+        self._connect = connect
 
     def create_schema(self, attempts: int = 10, delay: float = 3.0) -> None:
         """CREATE TABLE IF NOT EXISTS, retried while the database is still starting."""

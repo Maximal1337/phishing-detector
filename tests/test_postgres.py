@@ -55,3 +55,21 @@ def test_record_recent_and_the_poisoning_rule(store):
     latest = store.recent(2)
     assert [r["verdict"] for r in latest] == ["suspicious", "phishing"]
     assert set(latest[0]) == set(SCANS_COLUMNS)
+
+
+def test_pool_reuses_its_connection_and_reconnects_after_a_drop():
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    from webapp.credentials import DatabasePool
+
+    pool = DatabasePool(conninfo_to_dict(URL), timeout=5)
+    with pool.connection() as conn:
+        first = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+    with pool.connection() as conn:
+        assert conn.execute("SELECT pg_backend_pid()").fetchone()[0] == first  # the same server process
+    with psycopg.connect(URL, autocommit=True) as admin:
+        admin.execute("SELECT pg_terminate_backend(%s)", (first,))  # the server drops the connection
+    with pool.connection() as conn:
+        assert conn.execute("SELECT pg_backend_pid()").fetchone()[0] != first  # replaced, no error
+    pool.reset()

@@ -411,3 +411,12 @@ def test_gunicorn_settings_and_json_log_lines():
     assert gunicorn_conf.control_socket_disable is True and gunicorn_conf.worker_tmp_dir == "/tmp"
     record = logging.LogRecord("gunicorn.error", logging.ERROR, __file__, 1, 'Worker failed: "%s"', ("boot",), None)
     assert json.loads(gunicorn_conf.JsonFormatter().format(record)) == {"event": "gunicorn", "level": "error", "message": 'Worker failed: "boot"'}
+
+
+def test_database_down_through_the_real_pool_reports_unavailable():
+    from webapp.credentials import DatabasePool
+    from webapp.storage import PostgresHistory
+
+    pool = DatabasePool({"host": "127.0.0.1", "port": 9, "dbname": "none", "connect_timeout": 1}, lambda: ("u", "p"), timeout=1)
+    body = _scan(_client(history=PostgresHistory(pool.connection)), make_email(text="Please reply within 24 hours." + chr(10))).get_json()
+    assert (body["history_status"], body["raised_from"], body["verdict"]) == ("unavailable", "likely_legitimate", "suspicious")
