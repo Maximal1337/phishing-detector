@@ -16,22 +16,26 @@ CACHE_SECONDS = 300  # re-read a secret every 5 minutes, so a rotated value is p
 
 
 class CachedSecret:
-    """A JSON secret from Secrets Manager, cached for CACHE_SECONDS."""
+    """A JSON secret from Secrets Manager, cached for CACHE_SECONDS. Safe to share between threads:
+    one thread refreshes it while the others wait, so an expired secret is fetched once, not per thread."""
 
     def __init__(self, secret_id: str, fetch: Callable[[str], str] | None = None) -> None:
         self._secret_id = secret_id
         self._fetch = fetch or _secrets_manager_fetch
         self._value: dict | None = None
         self._read_at = 0.0
+        self._lock = threading.Lock()
 
     def get(self) -> dict:
-        if self._value is None or time.monotonic() - self._read_at > CACHE_SECONDS:
-            self._value = json.loads(self._fetch(self._secret_id))
-            self._read_at = time.monotonic()
-        return self._value
+        with self._lock:
+            if self._value is None or time.monotonic() - self._read_at > CACHE_SECONDS:
+                self._value = json.loads(self._fetch(self._secret_id))
+                self._read_at = time.monotonic()
+            return self._value
 
     def forget(self) -> None:
-        self._value = None
+        with self._lock:
+            self._value = None
 
 
 def _secrets_manager_fetch(secret_id: str) -> str:
@@ -115,6 +119,9 @@ class DatabasePool:
             pool.close(timeout=0)
 
 
+POOL_SIZE = 4  # per worker process; at least gunicorn's threads per worker (webapp/gunicorn_conf.py)
+
+
 def database_connect() -> Callable | None:
     """A function returning a database connection context, or None when no database is configured."""
     host = os.environ.get("DB_HOST")
@@ -129,8 +136,8 @@ def database_connect() -> Callable | None:
     }
     if secret_id := os.environ.get("DB_SECRET_ARN"):  # the RDS-managed master secret, rotated by RDS
         secret = CachedSecret(secret_id)
-        pool = DatabasePool(options, lambda: (secret.get()["username"], secret.get()["password"]), forget=secret.forget)
+        pool = DatabasePool(options, lambda: (secret.get()["username"], secret.get()["password"]), forget=secret.forget, max_size=POOL_SIZE)
     else:
         user, password = os.environ.get("DB_USER", ""), os.environ.get("DB_PASSWORD", "")
-        pool = DatabasePool(options, lambda: (user, password))
+        pool = DatabasePool(options, lambda: (user, password), max_size=POOL_SIZE)
     return pool.connection

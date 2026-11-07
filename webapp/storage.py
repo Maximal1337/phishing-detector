@@ -144,6 +144,7 @@ class ValkeyCache:
     def __init__(self, url: str) -> None:
         import redis  # only needed when a cache is configured
 
+        # redis-py clients are thread-safe: each command takes a connection from the client's own pool.
         self._client = redis.Redis.from_url(url, socket_timeout=1, socket_connect_timeout=1)
 
     def get(self, key: str):

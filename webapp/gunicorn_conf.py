@@ -9,6 +9,13 @@ import logging
 
 bind = "0.0.0.0:8000"
 workers = 2
+# Threads: a scan mostly waits on PostgreSQL and Valkey, so 4 threads per worker serve requests while
+# others wait. Each worker's connection pool holds up to 4 connections (webapp.credentials.POOL_SIZE).
+worker_class = "gthread"
+threads = 4
+# Keep idle connections from the load balancer open longer than its 60 s idle timeout, so the ALB
+# always closes them first; otherwise it may send a request on a connection gunicorn is closing (502).
+keepalive = 75
 worker_tmp_dir = "/tmp"  # worker heartbeat files; the root filesystem is read-only
 
 # The control socket (since 25.1.0, for the gunicornc tool) isn't used: systemd and the Auto Scaling

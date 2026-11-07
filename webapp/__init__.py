@@ -16,6 +16,7 @@ import hmac
 import json
 import os
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -40,9 +41,15 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store",
 }
 
+_log_lock = threading.Lock()  # gthread workers: one whole line at a time
+
+
 def log_event(event: str, **fields) -> None:
     """One JSON line on stdout (CloudWatch Logs in AWS). Callers pass ids, counts and class names only, never email content."""
-    print(json.dumps({"event": event, **fields}, default=str), file=sys.stdout, flush=True)
+    line = json.dumps({"event": event, **fields}, default=str) + chr(10)
+    with _log_lock:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 class LoggedHistory:
