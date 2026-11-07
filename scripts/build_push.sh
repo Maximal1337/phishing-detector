@@ -15,7 +15,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 aws_ecr() { aws ecr "$@" --profile "$AWS_PROFILE" --region "$AWS_REGION"; }
 
-if [ -n "$(git status --porcelain)" ]; then
+# Any change to tracked files, or an untracked file among the image's inputs (.dockerignore
+# allow-list), means the tag wouldn't name the code that is built.
+if [ -n "$(git status --porcelain --untracked-files=no)" ] ||
+  [ -n "$(git status --porcelain -- Dockerfile requirements.lock phishing_detector webapp)" ]; then
   echo "The working tree has uncommitted changes; commit first so the tag matches the code." >&2
   exit 1
 fi
