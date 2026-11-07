@@ -562,19 +562,63 @@ include about 80 ms of network. The last column is after the history query fix b
   - scale-in went one instance at a time: 4 → 3 seventeen minutes after the load, 3 → 2 about five minutes later. The
     stopped instances shut down cleanly in 0.4 s, and the full `terraform plan` afterwards had no changes.
 
-  With 4 instances the database ran short of memory, though:
-  - 32 connections (4 instances × 2 workers × 4) on a db.t4g.micro with 1 GiB: freeable memory about 90 MB, swap
-    53 → 142 MB.
-  - About every 70 seconds all 32 connections stalled together for 2-14 s. In the app log, the slow requests on every
-    instance end in the same second.
-  - So throughput swung between 268 and 437 requests/s and client p99 reached 1 s; still no errors.
-  - The swap is the likely cause, but not proven: Enhanced Monitoring and Performance Insights are off. Disk, CPU
-    credits and Valkey were normal.
-- **The maximum of 4 instances** therefore needs more database memory, not CPU (44 % at 437 requests/s).
-  `max_connections` (about 109 on this class) isn't the limit either. Options:
-  - RDS Proxy, so the instances share fewer database connections;
-  - a larger class: db.t4g.small has 2 GiB;
-  - fewer connections per instance.
+  With 4 instances, requests stalled together. About every 70 seconds all 32 connections (4 instances × 2 workers ×
+  4) stopped for 2-14 s, and the slow requests on every instance ended in the same second. Throughput swung between
+  268 and 437 requests/s and client p99 reached 1 s; no request failed. See the diagnosis below.
+- **The maximum of 4 instances** stays. The task needs 2, and 2 instances have a large margin: 297 requests/s at 20 %
+  RDS CPU. Above that, the stalls set the limit, not RDS CPU (44 % at 437 requests/s).
+
+### Stalls under load: diagnosis (2026-11-07)
+
+A third run with the same load (50 concurrent for 10 minutes, the group again went from 2 to 4). On a separate
+read-only connection through SSM, `pg_stat_activity` was sampled every 0.5 s. Before and after, `pg_stat_wal` and
+`pg_stat_checkpointer` were read, and the checkpoint and autovacuum lines were taken from the RDS log.
+
+**What was observed.**
+- Five stalls in 10 minutes, 4-52 s long, the longest request 16 s.
+- Three of them came while the group still had 2 instances (16 connections). The number of connections isn't the
+  trigger.
+
+**Every stall was an automatic ANALYZE of `scans`.**
+- The RDS log logs ANALYZE runs longer than 10 s. Each stall started and ended in the same seconds as one of them:
+  5 of 5 in this run and 5 of 5 in the run before.
+- Each ANALYZE took 18-52 s but used only 2-5 s of CPU.
+- It ran every 1-2 minutes because the load test inserts about 300 rows a second. Autovacuum analyzes a table again
+  after 10 % of its rows change.
+
+**What the database showed during a stall.**
+- The sampler's own query didn't return for 8-23 s.
+- Around that gap, the app's connections were `active` with no wait event, next to an active autovacuum worker.
+- No row or table lock waits; once, a single session briefly waited to extend the table (`Lock/extend`). WAL waits
+  (`WALWrite`, `WalSync`) were as rare as outside the stalls.
+
+**Ruled out.**
+- **Locks:** no row or table lock waits.
+- **WAL and checkpoints:**
+  - 117 MB of WAL in 14 minutes, 2.8 % of it full-page images;
+  - 2 timed checkpoints and no requested ones;
+  - WAL fsync took 1.0 ms on average;
+  - checkpoints don't line up with the stalls.
+- **Disk:** latency about 1 ms, queue at most 0.4.
+- **Also normal:** CPU credits and Valkey.
+- **The app:** the database stopped answering a separate session too, for all instances at once.
+
+**Not proven: why one ANALYZE stops everything.** The working hypothesis is memory.
+- The instance has 1 GiB, about 90 MB free and 85-133 MB in swap.
+- ANALYZE holds a sample of 30 000 rows in memory, the jsonb `signals` included.
+- Its high system CPU time fits page reclaim, which PostgreSQL doesn't report as a wait event.
+- Against it: `SwapUsage` didn't rise at each stall. That metric shows swap in use, not paging.
+
+**How to check.** Turn on Enhanced Monitoring (OS memory, swap in and out per second, the process list) or Database
+Insights (wait events and CPU over time), then run the same test.
+
+**Options, none implemented:**
+- a larger class: db.t4g.small has 2 GiB;
+- RDS Proxy, or fewer connections per instance (less memory in backends);
+- a lighter or rarer ANALYZE for this table: a lower statistics target for `signals` and `email_sha256`, which no
+  query filters on, or a table-level `autovacuum_analyze_scale_factor`;
+- checkpoint tuning: the data doesn't point at checkpoints, so this is the least likely to help;
+- a retention policy or partitions: a smaller table makes each ANALYZE cheaper.
 
 ### The history query (D-112, D-113)
 
