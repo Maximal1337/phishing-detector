@@ -530,7 +530,11 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
     target;
   - the group went from 2 to 3 instances (target tracking asked for 3, not 4: 2 × 6168 / 4400 = 2.8);
   - the new instance was healthy about 2 minutes after its launch;
-  - no request failed during the run.
+  - no request failed during the run;
+  - after the scale-out, Auto Scaling lowered the scale-in alarm's threshold from 3960 to 3080 requests per target.
+    Once the per-target count had stayed below it for 15 minutes, the group went back to 2 instances, 18 minutes after
+    the load ended;
+  - a full `terraform plan` afterwards showed no changes: the group's desired count isn't managed by Terraform.
 
   But throughput didn't grow. It fell from 231 to 145 requests/s, client p95 rose from 337 to 800 ms, and RDS CPU went
   from 54 % to 98 %. The database had become the limit:
