@@ -484,17 +484,19 @@ The report goes to standard output; it contains only counts, metrics and signal 
 ## Performance and scaling
 
 Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront: scans only, 80 % unique emails and
-20 % repeats, one minute per step, two t3.micro instances, no scaling. Client times include about 80 ms of network.
+20 % repeats, one minute per step, two t3.micro instances (each run ended before the group scaled out). Client times
+include about 80 ms of network. The last column is after the history query fix below.
 
-| | Before (sync, new DB connection per call) | + connection pool | + 2 workers × 4 threads (gthread) |
-|---|---|---|---|
-| Requests/s at 5 / 10 / 20 / 30 / 50 concurrent | 33 / 53 / 53 / 52 / 52 | 48 / 96 / 124 / 96 / 137 | 47 / 91 / 163 / 217 / **243** |
-| Client p50 / p95 at 10 concurrent | 177 / 274 ms | 102 / 120 ms | 107 / 135 ms |
-| Client p95 at 50 concurrent | 1932 ms | 554 ms | **324 ms** |
-| Errors | 0 | 504 from 20 concurrent (56 in all) | **0** |
-| Server time, uncached p50 / p95 | 68 / 95 ms | 20 / 31 ms | 39 / 95 ms |
-| Server time, cached p50 / p95 | 59 / 87 ms | 12 / 24 ms | 27 / 81 ms |
-| CPU, RDS (max) / app instances (max) | 63 % / 42 % | 33 % / 41 % | 62 % / 72 % |
+| | Before (sync, new DB connection per call) | + connection pool | + 2 workers × 4 threads (gthread) | + history query fix (D-112, D-113) |
+|---|---|---|---|---|
+| Requests/s at 5 / 10 / 20 / 30 / 50 concurrent | 33 / 53 / 53 / 52 / 52 | 48 / 96 / 124 / 96 / 137 | 47 / 91 / 163 / 217 / 243 | 49 / 93 / 182 / 249 / **297** |
+| Client p50 / p95 at 10 concurrent | 177 / 274 ms | 102 / 120 ms | 107 / 135 ms | 103 / 143 ms |
+| Client p95 at 50 concurrent | 1932 ms | 554 ms | 324 ms | **246 ms** |
+| Errors | 0 | 504 from 20 concurrent (56 in all) | 0 | **0** |
+| Server time, uncached p50 / p95 | 68 / 95 ms | 20 / 31 ms | 39 / 95 ms | 29 / 67 ms |
+| Server time, cached p50 / p95 | 59 / 87 ms | 12 / 24 ms | 27 / 81 ms | 17 / 45 ms |
+| CPU, RDS (max) / app instances (max) | 63 % / 42 % | 33 % / 41 % | 62 % / 72 % | **20 %** / 88 % |
+| Rows in `scans` | ≈ 15 000 | ≈ 60 000 | ≈ 105 000 | ≈ 258 000 |
 
 - **How the monitoring led to the cause.** In the first run throughput stopped at 52 requests/s while the app
   instances were at 42 % CPU and RDS at 63 %: the app wasn't busy, the database was. Every history call opened a new
@@ -514,6 +516,9 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
   counters (`conntrack_allowance_exceeded` and the bandwidth and packet allowances) and the container's listen-queue
   overflow counters didn't move, so the cause wasn't confirmed. With threads and keep-alive connections, all steps ran
   without an error and those counters stayed at 0.
+- **Clean shutdown.** gunicorn's `worker_exit` hook closes the worker's connection pool. Before, the pool's threads
+  were left running: psycopg_pool waited 5 s for each and logged a warning, and `docker stop` killed the container
+  after its 10-second timeout (11 s locally; now 1 s, no warnings).
 - **Keep-alive.** gunicorn keeps idle connections open for 75 seconds, longer than the load balancer's 60-second idle
   timeout, so the load balancer always closes an idle connection first. The other way round, the load balancer may send
   a request on a connection gunicorn is just closing, and the viewer gets a 502.
@@ -525,7 +530,8 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
   above the t3 baseline costs extra in unlimited mode. Terraform sets the group's minimum (2) and maximum (4) and ignores
   its desired count (`ignore_changes = [desired_capacity]`): the policy owns the number of instances, and a plan after a
   scale-out doesn't pull the group back to two.
-- **Scale-out test** (2026-11-07, 12 minutes at 50 concurrent requests). The policy worked:
+- **First scale-out test** (2026-11-07, 12 minutes at 50 concurrent requests, before the history query fix). The
+  policy worked:
   - the alarm fired 4 min 57 s after the load started, after three one-minute datapoints of 6168-6608 requests per
     target;
   - the group went from 2 to 3 instances (target tracking asked for 3, not 4: 2 × 6168 / 4400 = 2.8);
@@ -544,13 +550,120 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
     domains collect all the rows; real traffic spreads over more domains, but a busy one would grow the same way.
   - Locally, `EXPLAIN ANALYZE` of that count on 150 000 rows of one domain read every page of the table (30 ms). The
     pages read grow in step with the rows.
-- **The maximum of 4 instances** was meant to match the database. The gthread run gave a linear estimate of about
-  75 % RDS CPU at 4 × 4400 requests a minute ≈ 290 requests/s. The scale-out test shows that this doesn't hold while
-  the history query grows with the table: more instances only add load on RDS. Connections aren't the limit:
-  4 instances × 2 workers × 4 = 32 (64 during a refresh), out of about 109. Next steps, in order:
-  1. Make the history count independent of the table size: a `trusted` column set on insert, with a partial index and
-     a capped count. Then measure again.
-  2. Beyond that, RDS Proxy or a larger database class.
+- **Scale-out test after the fix** (2026-11-07, 10 minutes at 50 concurrent requests). The policy and the throughput
+  both worked:
+  - the alarm fired after 1.5 minutes: the load steps just before had already pushed the per-target count over the
+    target;
+  - the policy asked for 5 instances (2 × about 9000 / 4400) and got the maximum of 4; both new instances were healthy
+    about 2 minutes later;
+  - throughput rose with the instances: 281-302 requests/s on 2 instances, 268-437 on 4. On the client, p50 fell from
+    158 to 110 ms; on the server, from 42 to 23 ms;
+  - RDS CPU went from 21-25 % to 32-44 %, and no request failed;
+  - scale-in went one instance at a time: 4 → 3 seventeen minutes after the load, 3 → 2 about five minutes later. The
+    stopped instances shut down cleanly in 0.4 s, and the full `terraform plan` afterwards had no changes.
+
+  With 4 instances the database ran short of memory, though:
+  - 32 connections (4 instances × 2 workers × 4) on a db.t4g.micro with 1 GiB: freeable memory about 90 MB, swap
+    53 → 142 MB.
+  - About every 70 seconds all 32 connections stalled together for 2-14 s. In the app log, the slow requests on every
+    instance end in the same second.
+  - So throughput swung between 268 and 437 requests/s and client p99 reached 1 s; still no errors.
+  - The swap is the likely cause, but not proven: Enhanced Monitoring and Performance Insights are off. Disk, CPU
+    credits and Valkey were normal.
+- **The maximum of 4 instances** therefore needs more database memory, not CPU (44 % at 437 requests/s).
+  `max_connections` (about 109 on this class) isn't the limit either. Options:
+  - RDS Proxy, so the instances share fewer database connections;
+  - a larger class: db.t4g.small has 2 GiB;
+  - fewer connections per instance.
+
+### The history query (D-112, D-113)
+
+**How it was found.** In the first scale-out test, a third instance made things worse: throughput fell from 231 to
+145 requests/s while RDS CPU reached 98 %. The history check counted the earlier trusted phishing verdicts of the
+sender domain, and `EXPLAIN` showed the count reading every phishing row of that domain, so each scan got slower as the
+table grew.
+
+**What changed.**
+- The poisoning rule is a column PostgreSQL computes itself:
+  `trusted boolean GENERATED ALWAYS AS (signals @> '[{"id":"auth.dmarc_pass"}]' OR signals @> '[{"id":"sender.lookalike_domain"}]') STORED`.
+  Every writer fills it, also the previous app version during a rollout.
+- One partial index holds only the rows the check can count.
+- The check reads at most 5 of them and never the table (an index-only scan). It only needs to know that some exist,
+  and the cache mark already held 5.
+
+| Query | Index | Why |
+|---|---|---|
+| History check: `WHERE sender_domain = $1 AND verdict = 'phishing' AND trusted AND email_sha256 <> $2 ORDER BY email_sha256 LIMIT 5` | `scans_trusted_flag_shas`: `(sender_domain, email_sha256) WHERE verdict = 'phishing' AND trusted` | At most 5 index entries, whatever the table size. The query repeats the index's condition word for word, so the planner can use it, and only this index returns rows in that order (see the lesson below). |
+| Latest scans (`/api/history`): `ORDER BY id DESC LIMIT n` | the primary key, read backwards | No extra index needed. |
+| Insert a scan | the primary key; the partial index only for a trusted phishing row | The old `(sender_domain, verdict)` index took an entry for every row. Nothing but the old count used it (`EXPLAIN` and `pg_stat_user_indexes`), so it is dropped. |
+
+**Why writes got cheaper.** Most inserts now update one index instead of two; only trusted phishing rows touch the
+partial index. Its entries are larger, though: each carries the SHA-256 and can't be deduplicated. In the synthetic
+benchmark, with 10 % trusted phishing rows, the new index is 20 MB against 10 MB for the old one at 1.5 million rows.
+On RDS it is 3.1 MB for about 258 000 rows. Insert time wasn't measured.
+
+**Why it matters for campaigns.** A campaign is one hot domain: thousands of phishing scans from the same sender within
+hours. That was the worst case for the old count, which read all of them on every scan. Now a hot domain costs the
+same as a quiet one: the first 5 entries end the lookup. A spoofed domain (phishing but never trusted) has no entries
+at all.
+
+**Measured locally** (`scripts/history_query_bench.py`, PostgreSQL 18 in Docker, rows shaped like the load test;
+server execution time, median of 25):
+
+| Rows | Domain | Before | After |
+|---|---|---|---|
+| 150 000 | hot (lookalike campaign) | 8.3 ms, 3963 pages | 0.012 ms, 4 pages |
+| 150 000 | spoofed | 8.3 ms, 3963 pages | 0.009 ms, 3 pages |
+| 1 500 000 | hot (lookalike campaign) | 125 ms, 39 606 pages | 0.012 ms, 7 pages |
+| 1 500 000 | spoofed | 123 ms, 39 606 pages | 0.009 ms, 3 pages |
+
+A quiet domain takes about 0.01 ms both ways.
+
+**On RDS** (`EXPLAIN (ANALYZE, BUFFERS)` run read-only in the app container through SSM, about 258 000 rows):
+- an index-only scan of `scans_trusted_flag_shas` for a hot, a trusted (legitimate, DMARC pass), a spoofed and a
+  never-seen domain;
+- 0.02-0.13 ms, 3-8 pages each;
+- that held with no page marked all-visible yet (`relallvisible` 0 of 12 274 pages).
+
+**A lesson about the planner.** The first version of the query (`... LIMIT 5`, no `ORDER BY`, index
+`(sender_domain) INCLUDE (email_sha256)`) passed its local plan test and was 0.01 ms in the benchmark. On RDS it made
+things worse: 71-82 requests/s at 98 % RDS CPU.
+- **On RDS it ran as a sequential scan.** The planner treats the domain, the verdict and `trusted` as independent.
+  Legitimate mail passes DMARC, so `trusted` is common, and phishing is common in the load test, so it expected about
+  9000 matches for a domain that had none. With `LIMIT 5`, a sequential scan that stops after 5 rows looked cheap. For a
+  domain with no flags it read the whole table, 16-17 ms each time.
+- **Why the local test missed it.** Its data was unrepresentative: the quiet domains' mail didn't pass DMARC. It also
+  ran `VACUUM ANALYZE` before `EXPLAIN`. VACUUM marks pages all-visible, which makes the index-only scan look cheap.
+  After the migration rewrote the table on RDS, no page was all-visible.
+- **What didn't help.** `ANALYZE` alone didn't change the plan. Extended statistics fixed the estimate for domains
+  without flags, but then a hot campaign domain got the sequential scan; its rows are the newest, at the end of the
+  table. `ORDER BY id DESC` let the planner walk the primary key backwards instead, with the same result.
+- **The fix is the query's shape.** `email_sha256` is in the index key and the query orders by it. Only this index
+  returns rows in that order, so it is the only plan that can stop after 5 rows. Any other plan has to read and sort
+  every match. This holds whatever the statistics say: it was checked with and without `ANALYZE`, with an empty
+  visibility map and for the generic plan of a prepared statement.
+- **The plan test now** uses rows shaped like production (legitimate mail passes DMARC, the campaign comes last) and
+  doesn't VACUUM. On the first version of the query it fails (sequential scan); on the current one it passes.
+
+**The migration** runs at every start of every instance (`webapp/storage.py`, `migrate`):
+- Each step runs only when needed.
+- The instances take turns under an advisory lock. The lock is polled with `pg_try_advisory_lock`: a session blocked in
+  `pg_advisory_lock` made a concurrent `CREATE INDEX CONCURRENTLY` fail with "deadlock detected" in a local test.
+- An index left invalid by an interrupted build is dropped and built again.
+- After building the index it runs `ANALYZE scans`, so the new column has statistics at once.
+- **Adding the generated column rewrites the table under an exclusive lock.** On RDS, with about 250 000 rows, the
+  whole first migration took 5.5 s. The slowest request in those seconds waited 1.9 s, and none failed. The migration
+  gives up after 5 s of waiting for the lock rather than queue the app behind it. On a large table you'd instead add a
+  plain column, fill it in batches, then switch the queries.
+- **The index is built with `CONCURRENTLY`**, so writes continue. The second migration (new index, `ANALYZE`, drop the
+  first partial index) took 2.3 s on RDS.
+- **During the refresh**, the instances still on the old version count without an index (a full scan) until they are
+  replaced.
+- **A rollback to that version** builds the old index again at its start (a short write lock), and the next
+  roll-forward drops it.
+
+**Next steps:** a retention policy for scans (the check only needs recent history), or monthly partitions so old scans
+are dropped a partition at a time. Beyond that, RDS Proxy or a larger database class.
 
 ## Screenshots
 
