@@ -251,6 +251,15 @@ _`terraform destroy` order and the CLI checks that confirm nothing is left._
 
 _What each resource costs per day and the total for the test period._
 
+- **CPU credits of the t3.micro instances: unlimited, set explicitly.** In standard mode a t3 gets no launch credits
+  ([AWS docs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances-standard-mode-concepts.html)),
+  so a new instance would boot at the 10 % baseline: the boot (Docker, the CloudWatch agent, the image pull) would not
+  finish within the 180-second health-check grace period, and every rollout or replacement would be minutes slower.
+  Unlimited mode costs extra only while an instance's average CPU stays above the baseline: surplus credits are billed
+  per vCPU-hour ($0.05 in the AWS example for us-east-1), so the worst case, 100 % CPU around the clock, is about
+  $2 per day per instance (2 vCPUs × 90 % above baseline × 24 h × $0.05). The `phishdet-app-cpu` alarm (above 80 % for
+  10 minutes) and the AWS budget alert catch that long before it adds up.
+
 ## Security
 
 _IAM, network exposure, encryption, secrets handling, untrusted email handling, and the justification for every wildcard permission and every skipped scanner check._
