@@ -25,6 +25,13 @@ control_socket_disable = True
 accesslog = None  # the app writes its own JSON line per request
 
 
+def worker_exit(server, worker) -> None:
+    """Server hook, run in the worker process as it exits: close its PostgreSQL pool cleanly."""
+    from webapp.credentials import close_pools
+
+    close_pools()
+
+
 class JsonFormatter(logging.Formatter):
     """gunicorn's own log lines (start, workers, signals, errors) as JSON, like the app's lines."""
 

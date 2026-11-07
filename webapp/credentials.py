@@ -54,6 +54,9 @@ def basic_auth_credentials() -> Callable[[], tuple[str, str] | None]:
     return (lambda: (user, password)) if user and password else (lambda: None)
 
 
+_POOLS: list["DatabasePool"] = []  # every pool made in this process, for close_pools()
+
+
 class DatabasePool:
     """A small pool of PostgreSQL connections per worker process, opened on first use.
 
@@ -78,6 +81,7 @@ class DatabasePool:
         self._pool = None
         self._pid: int | None = None
         self._lock = threading.Lock()
+        _POOLS.append(self)
 
     def _current(self):
         with self._lock:
@@ -111,12 +115,23 @@ class DatabasePool:
             raise
 
     def reset(self) -> None:
+        self.close(timeout=0)
+        self._forget()
+
+    def close(self, timeout: float = 2.0) -> None:
+        """Close this process's pool and wait up to `timeout` for its threads to stop."""
         with self._lock:
             pool, own = self._pool, self._pid == os.getpid()
             self._pool = None
-        self._forget()
         if pool is not None and own:  # a pool inherited from the parent process is only dropped
-            pool.close(timeout=0)
+            pool.close(timeout=timeout)
+
+
+def close_pools(timeout: float = 2.0) -> None:
+    """Called by gunicorn's worker_exit hook: an open pool's threads would otherwise be left running at exit,
+    and psycopg_pool warns that it couldn't stop them."""
+    for pool in _POOLS:
+        pool.close(timeout)
 
 
 POOL_SIZE = 4  # per worker process; at least gunicorn's threads per worker (webapp/gunicorn_conf.py)

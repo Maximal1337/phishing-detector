@@ -159,7 +159,7 @@ def test_migration_upgrades_an_old_table_once(schema):
         conn.execute(OLD_INSERT, ("a" * 64, "bank.test", "phishing", 80, json.dumps([{"id": "auth.dmarc_pass", "weight": 0}])))
         conn.execute(OLD_INSERT, ("b" * 64, "bank.test", "phishing", 80, json.dumps([{"id": "links.ip_host", "weight": 30}])))
     store = PostgresHistory(schema)
-    assert store.create_schema(attempts=1) == ["added column trusted", f"created {FLAGS_INDEX}", "dropped scans_domain_verdict"]
+    assert store.create_schema(attempts=1) == ["added column trusted", f"created {FLAGS_INDEX}", "analyzed scans", "dropped scans_domain_verdict"]
     assert store.create_schema(attempts=1) == []  # idempotent: the next start changes nothing
     with schema() as conn:
         assert conn.execute("SELECT email_sha256, trusted FROM scans ORDER BY id").fetchall() == [("a" * 64, True), ("b" * 64, False)]
@@ -185,7 +185,7 @@ def test_instances_starting_together_migrate_once(schema):
     for t in threads:
         t.join()
     assert errors == []
-    assert sorted(results, key=len) == [[], [], [], ["added column trusted", f"created {FLAGS_INDEX}", "dropped scans_domain_verdict"]]
+    assert sorted(results, key=len) == [[], [], [], ["added column trusted", f"created {FLAGS_INDEX}", "analyzed scans", "dropped scans_domain_verdict"]]
 
 
 def test_migration_replaces_the_first_partial_index(store):
@@ -193,7 +193,7 @@ def test_migration_replaces_the_first_partial_index(store):
         conn.autocommit = True
         conn.execute(f"DROP INDEX {FLAGS_INDEX}")
         conn.execute(FIRST_D112_INDEX)  # the schema 65fd4ab left on RDS
-    assert store.create_schema(attempts=1) == [f"created {FLAGS_INDEX}", "dropped scans_trusted_flags"]
+    assert store.create_schema(attempts=1) == [f"created {FLAGS_INDEX}", "analyzed scans", "dropped scans_trusted_flags"]
     assert store.create_schema(attempts=1) == []
 
 
@@ -209,7 +209,7 @@ def test_an_interrupted_index_build_is_rebuilt(store):
     with store._connect() as conn:
         conn.autocommit = True
         conn.execute("UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (FLAGS_INDEX,))
-        assert migrate(conn) == [f"dropped invalid {FLAGS_INDEX}", f"created {FLAGS_INDEX}"]
+        assert migrate(conn) == [f"dropped invalid {FLAGS_INDEX}", f"created {FLAGS_INDEX}", "analyzed scans"]
         assert conn.execute("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)", (FLAGS_INDEX,)).fetchone() == (True,)
 
 

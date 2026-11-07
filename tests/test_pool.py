@@ -74,3 +74,16 @@ def test_a_dropped_connection_resets_the_pool_and_the_secret():
     with pool.connection():  # the next call opens a fresh pool
         pass
     assert len(FakePool.created) == 2
+
+
+def test_worker_exit_closes_the_pool():
+    from webapp import gunicorn_conf
+
+    pool = DatabasePool({"host": "db"})
+    with pool.connection():
+        pass
+    gunicorn_conf.worker_exit(server=None, worker=None)
+    assert FakePool.created[-1].closed
+    with pool.connection():  # a later use opens a new one
+        pass
+    assert len(FakePool.created) == 2

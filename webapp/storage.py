@@ -177,6 +177,8 @@ def migrate(conn, lock_wait: float = MIGRATION_LOCK_WAIT) -> list[str]:
             if not valid or not valid[0]:
                 conn.execute(CREATE_FLAGS_INDEX)  # doesn't block writes
                 changes.append(f"created {FLAGS_INDEX}")
+                conn.execute("ANALYZE scans")  # statistics for the new column; autovacuum would only come later
+                changes.append("analyzed scans")
             for old in OLD_INDEXES:
                 if conn.execute(INDEX_VALID_SQL, (old,)).fetchone():
                     conn.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {old}")
