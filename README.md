@@ -467,6 +467,24 @@ docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --securit
 Run it from the repository root (in Git Bash on Windows, set `MSYS_NO_PATHCONV=1` first).
 The report goes to standard output; it contains only counts, metrics and signal ids.
 
+## Screenshots
+
+Taken on 2026-11-07 in the deployed stack; account numbers and ARNs are blurred.
+
+- [`01-ui-scan-result.png`](docs/screenshots/01-ui-scan-result.png): The web UI through CloudFront: verdict, score and indicators of a synthetic phishing sample (links defanged, nothing clickable).
+- [`02-basic-auth-prompt.png`](docs/screenshots/02-basic-auth-prompt.png): Basic auth in front of everything except `/healthz`.
+- [`03-dashboard.png`](docs/screenshots/03-dashboard.png): Dashboard `phishdet-overview` around the drill: one unhealthy target, replacement, two healthy again.
+- [`04-dashboard-latest-events.png`](docs/screenshots/04-dashboard-latest-events.png): The dashboard's latest-events table: app JSON lines; the bracketed lines are the previous version's gunicorn stop messages, from before gunicorn logged JSON.
+- [`05-targets-unhealthy.png`](docs/screenshots/05-targets-unhealthy.png): Target group during the drill: one target unhealthy 21 s after the service stopped, the old one draining.
+- [`05b-targets-healthy-after.png`](docs/screenshots/05b-targets-healthy-after.png): After the drill: both targets healthy.
+- [`06-alarm-unhealthy-hosts.png`](docs/screenshots/06-alarm-unhealthy-hosts.png): Alarm `phishdet-unhealthy-hosts` and its history: OK → ALARM → OK, each "Successfully executed action".
+- [`07-alarm-mails.png`](docs/screenshots/07-alarm-mails.png): The ALARM and OK e-mails (address hidden).
+- [`08-asg-activity.png`](docs/screenshots/08-asg-activity.png): Auto Scaling activity: the failed instance terminated and a replacement launched within 48 s.
+- [`09-asg-instance-refresh.png`](docs/screenshots/09-asg-instance-refresh.png): Instance refresh history: rollout, rollback and rollout again, each without failed requests.
+- [`10-logs-insights-scans-by-verdict.png`](docs/screenshots/10-logs-insights-scans-by-verdict.png): Saved Logs Insights query `phishdet/scans-by-verdict`. The counts are smoke tests and the drill and rollout watches on the synthetic samples, not real traffic.
+- [`11-ecr-scan.png`](docs/screenshots/11-ecr-scan.png): ECR scan of an image on the current base: 0 critical, 4 high (glibc, zlib; no fixed Debian package yet).
+- [`12-log-groups.png`](docs/screenshots/12-log-groups.png): Where the logs are: five log groups, kept 7 days, four metric filters on the app log.
+
 ## Next steps
 
 _What would come next with more time._
