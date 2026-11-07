@@ -491,7 +491,7 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
 | Requests/s at 5 / 10 / 20 / 30 / 50 concurrent | 33 / 53 / 53 / 52 / 52 | 48 / 96 / 124 / 96 / 137 | 47 / 91 / 163 / 217 / **243** |
 | Client p50 / p95 at 10 concurrent | 177 / 274 ms | 102 / 120 ms | 107 / 135 ms |
 | Client p95 at 50 concurrent | 1932 ms | 554 ms | **324 ms** |
-| Errors | 0 | 504 from 20 concurrent (66 in all) | **0** |
+| Errors | 0 | 504 from 20 concurrent (56 in all) | **0** |
 | Server time, uncached p50 / p95 | 68 / 95 ms | 20 / 31 ms | 39 / 95 ms |
 | Server time, cached p50 / p95 | 59 / 87 ms | 12 / 24 ms | 27 / 81 ms |
 | CPU, RDS (max) / app instances (max) | 63 % / 42 % | 33 % / 41 % | 62 % / 72 % |
@@ -504,10 +504,16 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
   CPU per request (threads share the CPU and the database). Server time grows with load in the last column because
   requests now wait on RDS together; at 243 requests/s RDS is back at 62 % and is the next limit.
 - **The 504s in the middle run** were the load balancer failing to open TCP connections to the instances
-  (`TargetConnectionErrorCount` matched them minute by minute). A repeat at 20 concurrent requests had none, and the
-  instances' ENA allowance counters (`conntrack_allowance_exceeded` and the bandwidth and packet allowances) and the
-  container's listen-queue overflow counters didn't move, so the cause wasn't confirmed. With threads and keep-alive
-  connections, all steps ran without an error and those counters stayed at 0.
+  (`TargetConnectionErrorCount` matched them minute by minute). The load balancer's access logs show all of them
+  (56 scans, plus 4 from a watch script) within 2.5 minutes, on both instances, each after exactly 10 seconds with no
+  target status and `-1` processing times: the
+  [10-second TCP connection timeout](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html)
+  to the target. Meanwhile the same instances answered other requests in under 0.9 s, and gunicorn logged no worker
+  timeouts or restarts. The 504s started about 5 minutes after the instances entered service, so they weren't part of
+  the start-up. A repeat on the same instances at 20 concurrent requests had none, and the instances' ENA allowance
+  counters (`conntrack_allowance_exceeded` and the bandwidth and packet allowances) and the container's listen-queue
+  overflow counters didn't move, so the cause wasn't confirmed. With threads and keep-alive connections, all steps ran
+  without an error and those counters stayed at 0.
 - **Keep-alive.** gunicorn keeps idle connections open for 75 seconds, longer than the load balancer's 60-second idle
   timeout, so the load balancer always closes an idle connection first. The other way round, the load balancer may send
   a request on a connection gunicorn is just closing, and the viewer gets a 502.
@@ -519,7 +525,28 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
   above the t3 baseline costs extra in unlimited mode. Terraform sets the group's minimum (2) and maximum (4) and ignores
   its desired count (`ignore_changes = [desired_capacity]`): the policy owns the number of instances, and a plan after a
   scale-out doesn't pull the group back to two.
-- **Next steps:** once RDS is the limit, a larger instance class or RDS Proxy; more instances alone won't help then.
+- **Scale-out test** (2026-11-07, 12 minutes at 50 concurrent requests). The policy worked:
+  - the alarm fired 4 min 57 s after the load started, after three one-minute datapoints of 6168-6608 requests per
+    target;
+  - the group went from 2 to 3 instances (target tracking asked for 3, not 4: 2 × 6168 / 4400 = 2.8);
+  - the new instance was healthy about 2 minutes after its launch;
+  - no request failed during the run.
+
+  But throughput didn't grow. It fell from 231 to 145 requests/s, client p95 rose from 337 to 800 ms, and RDS CPU went
+  from 54 % to 98 %. The database had become the limit:
+  - Each scan counts the earlier phishing verdicts for its sender domain (the history check). That query reads every
+    phishing row of the domain, so it slows down as the table grows.
+  - The table grew from about 105 000 to 236 000 rows during the run. The load test reuses 15 sample emails, so a few
+    domains collect all the rows; real traffic spreads over more domains, but a busy one would grow the same way.
+  - Locally, `EXPLAIN ANALYZE` of that count on 150 000 rows of one domain read every page of the table (30 ms). The
+    pages read grow in step with the rows.
+- **The maximum of 4 instances** was meant to match the database. The gthread run gave a linear estimate of about
+  75 % RDS CPU at 4 × 4400 requests a minute ≈ 290 requests/s. The scale-out test shows that this doesn't hold while
+  the history query grows with the table: more instances only add load on RDS. Connections aren't the limit:
+  4 instances × 2 workers × 4 = 32 (64 during a refresh), out of about 109. Next steps, in order:
+  1. Make the history count independent of the table size: a `trusted` column set on insert, with a partial index and
+     a capped count. Then measure again.
+  2. Beyond that, RDS Proxy or a larger database class.
 
 ## Screenshots
 
