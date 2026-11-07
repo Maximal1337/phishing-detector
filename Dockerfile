@@ -25,5 +25,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
     CMD ["python", "-c", "import sys, urllib.request; sys.exit(urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).status != 200)"]
 
-# Two workers; the worker heartbeat files go to /tmp so the root filesystem can be read-only.
-CMD ["gunicorn", "--workers", "2", "--worker-tmp-dir", "/tmp", "--bind", "0.0.0.0:8000", "webapp:create_app()"]
+# Settings (2 workers, /tmp for heartbeats, no control socket, JSON log lines) in webapp/gunicorn_conf.py.
+CMD ["gunicorn", "--config", "python:webapp.gunicorn_conf", "webapp:create_app()"]

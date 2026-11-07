@@ -401,3 +401,13 @@ def test_undecodable_bytes_in_valkey_are_a_miss(capsys):
     body = _scan(_client(cache=GarbageCache()), (SAMPLES / "legit_receipt.eml").read_bytes()).get_json()
     assert body["cached"] is False and body["verdict"] == "likely_legitimate"
     assert '"event": "cache_decode_failed"' in capsys.readouterr().out
+
+
+def test_gunicorn_settings_and_json_log_lines():
+    import logging
+
+    from webapp import gunicorn_conf
+
+    assert gunicorn_conf.control_socket_disable is True and gunicorn_conf.worker_tmp_dir == "/tmp"
+    record = logging.LogRecord("gunicorn.error", logging.ERROR, __file__, 1, 'Worker failed: "%s"', ("boot",), None)
+    assert json.loads(gunicorn_conf.JsonFormatter().format(record)) == {"event": "gunicorn", "level": "error", "message": 'Worker failed: "boot"'}

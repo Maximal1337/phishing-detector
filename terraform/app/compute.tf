@@ -51,6 +51,12 @@ resource "aws_launch_template" "app" {
   }
   vpc_security_group_ids = [local.foundation.app_security_group_id]
 
+  # Standard credits (D-30): no charges for surplus credits; when the credits run out, the CPU is held
+  # at the t3.micro baseline, so scaling uses requests per target instead of CPU (README).
+  credit_specification {
+    cpu_credits = "standard"
+  }
+
   # IMDSv2 only; hop limit 2 so the container (one network hop further) can get the role's credentials.
   metadata_options {
     http_endpoint               = "enabled"

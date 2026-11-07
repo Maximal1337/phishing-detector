@@ -87,7 +87,7 @@ resource "aws_cloudwatch_dashboard" "main" {
           title  = "Latest app events other than successful requests"
           region = var.region
           view   = "table"
-          query  = "SOURCE '${aws_cloudwatch_log_group.app.name}' | fields @timestamp, event, path, status, error, verdict, duration_ms | filter event != \"request\" or status >= 400 | sort @timestamp desc | limit 50"
+          query  = "SOURCE '${aws_cloudwatch_log_group.app.name}' | fields @timestamp, coalesce(event, @message) as event_or_line, path, status, error, message, verdict, duration_ms | filter event != \"request\" or status >= 400 or not ispresent(event) | sort @timestamp desc | limit 50"
         }
       }],
     )
