@@ -40,16 +40,24 @@ ADD_TRUSTED = f"ALTER TABLE scans ADD COLUMN trusted boolean GENERATED ALWAYS AS
 # One partial index, for the history check only: it holds just the trusted phishing rows, with the SHA-256 in the
 # index, so the check reads at most FLAG_SHAS index entries and never the table (an index-only scan), however big
 # the table grows. The query repeats the index's predicate word for word, so the planner can use it.
-FLAGS_INDEX = "scans_trusted_flags"
+#
+# ORDER BY email_sha256 is there for the planner, not for the result: only this index returns rows in that order,
+# so it's the only plan that can stop after FLAG_SHAS rows. Without it, the LIMIT made a sequential scan look
+# cheap whenever the planner expected many matches (it treats domain, verdict and trusted as independent), and for
+# a domain with no flags that scan read the whole table (seen on RDS, D-112). ORDER BY id did the same through
+# the primary key.
+FLAGS_INDEX = "scans_trusted_flag_shas"
 INDEX_VALID_SQL = "SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)"
 CREATE_FLAGS_INDEX = (
-    f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {FLAGS_INDEX} ON scans (sender_domain) INCLUDE (email_sha256)"
+    f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {FLAGS_INDEX} ON scans (sender_domain, email_sha256)"
     " WHERE verdict = 'phishing' AND trusted"
 )
-OLD_INDEX = "scans_domain_verdict"  # (sender_domain, verdict) on every row; only the old history count used it
+# Indexes of earlier versions: (sender_domain, verdict) on every row, used only by the old history count; and the
+# first partial index, (sender_domain) INCLUDE (email_sha256), whose unordered LIMIT query got the bad plan.
+OLD_INDEXES = ("scans_domain_verdict", "scans_trusted_flags")
 TRUSTED_FLAGS_SQL = (
     "SELECT email_sha256 FROM scans"
-    " WHERE sender_domain = %s AND verdict = 'phishing' AND trusted AND email_sha256 <> %s LIMIT %s"
+    " WHERE sender_domain = %s AND verdict = 'phishing' AND trusted AND email_sha256 <> %s ORDER BY email_sha256 LIMIT %s"
 )
 LATEST_SQL = f"SELECT {', '.join(SCANS_COLUMNS)} FROM scans ORDER BY id DESC LIMIT %s"  # the primary key, backwards
 
@@ -169,9 +177,10 @@ def migrate(conn, lock_wait: float = MIGRATION_LOCK_WAIT) -> list[str]:
             if not valid or not valid[0]:
                 conn.execute(CREATE_FLAGS_INDEX)  # doesn't block writes
                 changes.append(f"created {FLAGS_INDEX}")
-            if conn.execute(INDEX_VALID_SQL, (OLD_INDEX,)).fetchone():
-                conn.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {OLD_INDEX}")
-                changes.append(f"dropped {OLD_INDEX}")
+            for old in OLD_INDEXES:
+                if conn.execute(INDEX_VALID_SQL, (old,)).fetchone():
+                    conn.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {old}")
+                    changes.append(f"dropped {old}")
         finally:
             conn.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
     finally:

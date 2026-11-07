@@ -3,11 +3,11 @@
     TEST_DATABASE_URL=postgresql://phishdet:<password>@127.0.0.1:15432/phishdet python scripts/history_query_bench.py --rows 150000,1500000
 
 For each size it fills one table with synthetic rows (no email content): 10 % from a hot lookalike domain (every
-phishing row trusted, like a campaign), 10 % from a spoofed domain (phishing, never trusted), 80 % from 500 quiet
-domains. Both indexes exist, so each query uses the one it was written for:
+phishing row trusted, like a campaign), 10 % from a spoofed domain (phishing, never trusted), 80 % legitimate mail
+that passes DMARC (trusted, but not phishing) from 500 quiet domains, as in the load test. Both indexes exist, so each query uses the one it was written for:
 
     before: count(*) with the jsonb rule        -> (sender_domain, verdict) on every row
-    after:  the `trusted` column, LIMIT 5        -> partial index of the trusted phishing rows
+    after:  the `trusted` column, ORDER BY email_sha256 LIMIT 5 -> partial index of the trusted phishing rows
 
 It prints the server's execution time (median of EXPLAIN ANALYZE runs), the pages read and the plan, and the
 index sizes. Uses only the database you point it at, and drops its schema at the end.
@@ -41,7 +41,7 @@ SELECT md5(g::text) || md5((g + 1)::text),
        CASE WHEN g % 10 < 2 THEN 70 ELSE 0 END,
        CASE g % 10 WHEN 0 THEN '[{"id": "sender.lookalike_domain", "weight": 35}, {"id": "links.ip_host", "weight": 30}]'::jsonb
                    WHEN 1 THEN '[{"id": "links.ip_host", "weight": 30}, {"id": "content.urgency", "weight": 15}]'::jsonb
-                   ELSE '[]'::jsonb END
+                   ELSE '[{"id": "auth.dmarc_pass", "weight": 0}]'::jsonb END
 FROM generate_series(1, {rows}) g
 """
 DOMAINS = ("hot.test", "spoofed.test", "quiet7.test")

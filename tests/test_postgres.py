@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from webapp.storage import FLAG_SHAS, FLAGS_INDEX, LATEST_SQL, OLD_INDEX, SCANS_COLUMNS, TRUSTED_FLAGS_SQL, PostgresHistory, migrate
+from webapp.storage import FLAG_SHAS, FLAGS_INDEX, LATEST_SQL, SCANS_COLUMNS, TRUSTED_FLAGS_SQL, PostgresHistory, migrate
 
 URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL not set")
@@ -37,19 +37,27 @@ OLD_COUNT = (
 )
 OLD_COUNT_PARAMS = [json.dumps([{"id": "auth.dmarc_pass"}]), json.dumps([{"id": "sender.lookalike_domain"}])]
 
-# Rows made by the database itself, for the plan tests: a hot lookalike domain (every phishing row trusted),
-# a spoofed domain (phishing, never trusted) and many quiet domains.
+# Rows made by the database itself, shaped like the load test that exposed a bad plan on RDS (D-112): legitimate
+# mail from a few domains passes DMARC (trusted, but not phishing), a spoofed domain sends phishing that is never
+# trusted, and a lookalike campaign (phishing, every row trusted) arrives last, at the end of the table.
 FILL = """
 INSERT INTO scans (email_sha256, sender_domain, verdict, score, signals)
 SELECT md5(g::text) || md5((g + 1)::text),
-       CASE g %% 10 WHEN 0 THEN 'hot.test' WHEN 1 THEN 'spoofed.test' ELSE 'quiet' || (g %% 500) || '.test' END,
-       CASE WHEN g %% 10 < 2 THEN 'phishing' ELSE 'likely_legitimate' END,
-       CASE WHEN g %% 10 < 2 THEN 70 ELSE 0 END,
-       CASE g %% 10 WHEN 0 THEN '[{"id": "sender.lookalike_domain", "weight": 35}]'::jsonb
-                   WHEN 1 THEN '[{"id": "links.ip_host", "weight": 30}]'::jsonb
-                   ELSE '[]'::jsonb END
+       CASE WHEN g %% 5 = 0 THEN 'spoofed.test' ELSE 'quiet' || (g %% 20) || '.test' END,
+       CASE WHEN g %% 5 = 0 THEN 'phishing' ELSE 'likely_legitimate' END,
+       CASE WHEN g %% 5 = 0 THEN 70 ELSE 0 END,
+       CASE WHEN g %% 5 = 0 THEN '[{"id": "links.ip_host", "weight": 30}]'::jsonb
+            ELSE '[{"id": "auth.dmarc_pass", "weight": 0}]'::jsonb END
 FROM generate_series(1, %s) g
 """
+FILL_CAMPAIGN = """
+INSERT INTO scans (email_sha256, sender_domain, verdict, score, signals)
+SELECT md5((-g)::text) || md5(g::text), 'hot.test', 'phishing', 70, '[{"id": "sender.lookalike_domain", "weight": 35}]'::jsonb
+FROM generate_series(1, %s) g
+"""
+FIRST_D112_INDEX = (  # as 65fd4ab built it: no id in the key
+    "CREATE INDEX scans_trusted_flags ON scans (sender_domain) INCLUDE (email_sha256) WHERE verdict = 'phishing' AND trusted"
+)
 
 
 @pytest.fixture
@@ -86,10 +94,12 @@ def plan(conn, sql, params):
 
 
 def fill(connect, rows):
+    """Rows, then ANALYZE as autovacuum would run it, but no VACUUM: no page is marked all-visible yet."""
     with connect() as conn:
         conn.autocommit = True
         conn.execute(FILL, (rows,))
-        conn.execute("VACUUM ANALYZE scans")  # sets the visibility map, as autovacuum would
+        conn.execute(FILL_CAMPAIGN, (rows // 10,))
+        conn.execute("ANALYZE scans")
 
 
 def test_table_has_the_scans_columns_and_the_generated_trusted_column(store):
@@ -128,14 +138,19 @@ def test_the_count_stops_at_the_cap(store):
     assert store.count_trusted_flags("hot.test", "f" * 64) == FLAG_SHAS
 
 
-def test_history_query_is_an_index_only_scan_of_the_partial_index(store):
+def test_history_query_uses_the_partial_index_whatever_the_statistics(store):
     fill(store._connect, 20_000)
     with store._connect() as conn:
-        for domain in ("hot.test", "spoofed.test", "quiet7.test", "unknown.test"):
-            assert ("Index Only Scan", FLAGS_INDEX) in plan(conn, TRUSTED_FLAGS_SQL, (domain, "f" * 64, FLAG_SHAS)), domain
+        conn.autocommit = True
+        for state in ("visibility map empty", "after VACUUM"):
+            for domain in ("hot.test", "spoofed.test", "quiet7.test", "unknown.test"):
+                found = plan(conn, TRUSTED_FLAGS_SQL, (domain, "f" * 64, FLAG_SHAS))
+                assert ("Index Only Scan", FLAGS_INDEX) in found, (state, domain, found)
+            conn.execute("VACUUM scans")
         assert ("Index Scan", "scans_pkey") in plan(conn, LATEST_SQL, (20,))  # /api/history: the primary key, backwards
         assert conn.execute(TRUSTED_FLAGS_SQL, ("spoofed.test", "f" * 64, FLAG_SHAS)).fetchall() == []
-        assert len(conn.execute(TRUSTED_FLAGS_SQL, ("hot.test", "f" * 64, FLAG_SHAS)).fetchall()) == FLAG_SHAS
+        first = conn.execute("SELECT email_sha256 FROM scans WHERE sender_domain = 'hot.test' ORDER BY email_sha256 LIMIT %s", (FLAG_SHAS,))
+        assert conn.execute(TRUSTED_FLAGS_SQL, ("hot.test", "f" * 64, FLAG_SHAS)).fetchall() == first.fetchall()
 
 
 def test_migration_upgrades_an_old_table_once(schema):
@@ -144,12 +159,12 @@ def test_migration_upgrades_an_old_table_once(schema):
         conn.execute(OLD_INSERT, ("a" * 64, "bank.test", "phishing", 80, json.dumps([{"id": "auth.dmarc_pass", "weight": 0}])))
         conn.execute(OLD_INSERT, ("b" * 64, "bank.test", "phishing", 80, json.dumps([{"id": "links.ip_host", "weight": 30}])))
     store = PostgresHistory(schema)
-    assert store.create_schema(attempts=1) == ["added column trusted", f"created {FLAGS_INDEX}", f"dropped {OLD_INDEX}"]
+    assert store.create_schema(attempts=1) == ["added column trusted", f"created {FLAGS_INDEX}", "dropped scans_domain_verdict"]
     assert store.create_schema(attempts=1) == []  # idempotent: the next start changes nothing
     with schema() as conn:
         assert conn.execute("SELECT email_sha256, trusted FROM scans ORDER BY id").fetchall() == [("a" * 64, True), ("b" * 64, False)]
         assert conn.execute("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)", (FLAGS_INDEX,)).fetchone() == (True,)
-        assert conn.execute("SELECT to_regclass(%s)", (OLD_INDEX,)).fetchone() == (None,)
+        assert conn.execute("SELECT to_regclass('scans_domain_verdict')").fetchone() == (None,)
     assert store.trusted_flag_shas("bank.test", "c" * 64, 5) == ["a" * 64]
 
 
@@ -170,7 +185,16 @@ def test_instances_starting_together_migrate_once(schema):
     for t in threads:
         t.join()
     assert errors == []
-    assert sorted(results, key=len) == [[], [], [], ["added column trusted", f"created {FLAGS_INDEX}", f"dropped {OLD_INDEX}"]]
+    assert sorted(results, key=len) == [[], [], [], ["added column trusted", f"created {FLAGS_INDEX}", "dropped scans_domain_verdict"]]
+
+
+def test_migration_replaces_the_first_partial_index(store):
+    with store._connect() as conn:
+        conn.autocommit = True
+        conn.execute(f"DROP INDEX {FLAGS_INDEX}")
+        conn.execute(FIRST_D112_INDEX)  # the schema 65fd4ab left on RDS
+    assert store.create_schema(attempts=1) == [f"created {FLAGS_INDEX}", "dropped scans_trusted_flags"]
+    assert store.create_schema(attempts=1) == []
 
 
 def test_the_previous_version_works_on_the_new_schema(store):
