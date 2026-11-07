@@ -236,6 +236,12 @@ _Using the web UI and the HTTP API on the deployed stack._
   unhealthy, that window is up to about 30 s. The interval is a trade-off: shorter detects faster but marks a target
   unhealthy on a brief hiccup (a slow start, a garbage-collection pause) and adds check traffic; longer means a longer
   502 window. 15 s × 2 is kept.
+- **Drill (measured 2026-11-07).** `systemctl stop phishdet` on one of the two instances (through SSM) while
+  `smoke_test.py --watch` scanned every 2 seconds: 502 for 18 seconds (9 failed requests, about half of those sent in
+  that window); the target was unhealthy after 21 s; the Auto Scaling group started a replacement after 48 s; two
+  healthy targets again after about 2.5 minutes. The alarm mails (unhealthy targets, and 5xx) arrived 3–4 minutes after
+  the failure, with OK mails 1–2 minutes later: load balancer metrics reach CloudWatch with a delay, so the alarms tell
+  people what happened; the health check and the Auto Scaling group do the recovery.
 
 ## Tear down
 
