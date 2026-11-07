@@ -15,7 +15,7 @@ from phishing_detector.checks.history import TRUSTED_SIGNALS
 
 SCANS_COLUMNS = ("id", "scanned_at", "email_sha256", "sender_domain", "verdict", "score", "signals")
 
-SCHEMA = """
+CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS scans (
   id            bigserial   PRIMARY KEY,
   scanned_at    timestamptz NOT NULL DEFAULT now(),
@@ -24,19 +24,38 @@ CREATE TABLE IF NOT EXISTS scans (
   verdict       text        NOT NULL,
   score         smallint    NOT NULL,
   signals       jsonb       NOT NULL
-);
-CREATE INDEX IF NOT EXISTS scans_domain_verdict ON scans (sender_domain, verdict);
+)
 """
 
-# The poisoning rule (D-09): an earlier phishing verdict counts only if that email passed DMARC
-# for the domain or the domain was a lookalike. Same rule as phishing_detector's InMemoryHistory.
-TRUSTED_FLAGS_WHERE = (
-    "sender_domain = %s AND verdict = 'phishing' AND email_sha256 <> %s AND ("
-    + " OR ".join("signals @> %s::jsonb" for _ in TRUSTED_SIGNALS)
-    + ")"
+# The poisoning rule (D-09) as a stored column, computed by PostgreSQL from `signals`: true when the scan passed
+# DMARC for its domain or the domain was a lookalike. Same rule as phishing_detector's InMemoryHistory. Any writer
+# fills it, also an older app version during a rollout. Changing TRUSTED_SIGNALS needs a new column (a migration).
+TRUSTED_EXPRESSION = " OR ".join(f"signals @> '{json.dumps([{'id': s}], separators=(',', ':'))}'" for s in TRUSTED_SIGNALS)
+HAS_TRUSTED_SQL = (
+    "SELECT 1 FROM information_schema.columns"
+    " WHERE table_schema = current_schema() AND table_name = 'scans' AND column_name = 'trusted'"
 )
-TRUSTED_FLAGS_SQL = f"SELECT count(*) FROM scans WHERE {TRUSTED_FLAGS_WHERE}"
-TRUSTED_FLAG_SHAS_SQL = f"SELECT email_sha256 FROM scans WHERE {TRUSTED_FLAGS_WHERE} ORDER BY id DESC LIMIT %s"
+ADD_TRUSTED = f"ALTER TABLE scans ADD COLUMN trusted boolean GENERATED ALWAYS AS ({TRUSTED_EXPRESSION}) STORED"
+
+# One partial index, for the history check only: it holds just the trusted phishing rows, with the SHA-256 in the
+# index, so the check reads at most FLAG_SHAS index entries and never the table (an index-only scan), however big
+# the table grows. The query repeats the index's predicate word for word, so the planner can use it.
+FLAGS_INDEX = "scans_trusted_flags"
+INDEX_VALID_SQL = "SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)"
+CREATE_FLAGS_INDEX = (
+    f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {FLAGS_INDEX} ON scans (sender_domain) INCLUDE (email_sha256)"
+    " WHERE verdict = 'phishing' AND trusted"
+)
+OLD_INDEX = "scans_domain_verdict"  # (sender_domain, verdict) on every row; only the old history count used it
+TRUSTED_FLAGS_SQL = (
+    "SELECT email_sha256 FROM scans"
+    " WHERE sender_domain = %s AND verdict = 'phishing' AND trusted AND email_sha256 <> %s LIMIT %s"
+)
+LATEST_SQL = f"SELECT {', '.join(SCANS_COLUMNS)} FROM scans ORDER BY id DESC LIMIT %s"  # the primary key, backwards
+
+# Every instance (and each gunicorn worker) runs the migration at start; this advisory lock makes them take turns.
+MIGRATION_LOCK = 0x70686973  # any constant ("phis")
+MIGRATION_LOCK_WAIT = 120.0  # seconds
 
 STATIC_TTL_SECONDS = 3600  # the email's own analysis
 FLAG_TTL_SECONDS = 7 * 24 * 3600  # a positive domain mark
@@ -71,11 +90,11 @@ class MemoryHistory:
     def _flags(self, sender_domain: str, exclude_sha256: str) -> list[dict]:
         return [r for r in self.rows if r["sender_domain"] == sender_domain and r["email_sha256"] != exclude_sha256 and is_trusted_flag(r)]
 
-    def count_trusted_flags(self, sender_domain: str, exclude_sha256: str) -> int:
-        return len(self._flags(sender_domain, exclude_sha256))
-
     def trusted_flag_shas(self, sender_domain: str, exclude_sha256: str, limit: int) -> list[str]:
-        return list(dict.fromkeys(r["email_sha256"] for r in reversed(self._flags(sender_domain, exclude_sha256))))[:limit]
+        return [r["email_sha256"] for r in reversed(self._flags(sender_domain, exclude_sha256))][:limit]
+
+    def count_trusted_flags(self, sender_domain: str, exclude_sha256: str) -> int:
+        return len(self.trusted_flag_shas(sender_domain, exclude_sha256, FLAG_SHAS))  # capped like PostgresHistory
 
     def recent(self, limit: int) -> list[dict]:
         return list(reversed(self.rows[-limit:]))
@@ -88,17 +107,21 @@ class PostgresHistory:
     def __init__(self, connect: Callable) -> None:
         self._connect = connect
 
-    def create_schema(self, attempts: int = 10, delay: float = 3.0) -> None:
-        """CREATE TABLE IF NOT EXISTS, retried while the database is still starting."""
+    def create_schema(self, attempts: int = 10, delay: float = 3.0) -> list[str]:
+        """Create or upgrade the table (D-112); retried while the database is still starting.
+
+        Returns the changes made, [] when the schema was already current. Safe on every start of every instance at
+        once: the instances take turns under an advisory lock, and each step is skipped when it's already done.
+        """
         for attempt in range(attempts):
             try:
                 with self._connect() as conn:
-                    conn.execute(SCHEMA)
-                return
+                    return migrate(conn)
             except Exception:
                 if attempt == attempts - 1:
                     raise
                 time.sleep(delay)
+        return []
 
     def record(self, row: dict) -> None:
         with self._connect() as conn:
@@ -107,23 +130,64 @@ class PostgresHistory:
                 (row["email_sha256"], row["sender_domain"], row["verdict"], row["score"], json.dumps(row["signals"])),
             )
 
-    @staticmethod
-    def _params(sender_domain: str, exclude_sha256: str) -> list:
-        return [sender_domain, exclude_sha256] + [json.dumps([{"id": s}]) for s in TRUSTED_SIGNALS]
+    def trusted_flag_shas(self, sender_domain: str, exclude_sha256: str, limit: int) -> list[str]:
+        """SHA-256s of up to `limit` earlier trusted flags, one per scan row (an email scanned twice can repeat)."""
+        with self._connect() as conn:
+            rows = conn.execute(TRUSTED_FLAGS_SQL, (sender_domain, exclude_sha256, limit)).fetchall()
+        return [r[0] for r in rows]
 
     def count_trusted_flags(self, sender_domain: str, exclude_sha256: str) -> int:
-        with self._connect() as conn:
-            return conn.execute(TRUSTED_FLAGS_SQL, self._params(sender_domain, exclude_sha256)).fetchone()[0]
-
-    def trusted_flag_shas(self, sender_domain: str, exclude_sha256: str, limit: int) -> list[str]:
-        with self._connect() as conn:
-            rows = conn.execute(TRUSTED_FLAG_SHAS_SQL, self._params(sender_domain, exclude_sha256) + [limit]).fetchall()
-        return list(dict.fromkeys(r[0] for r in rows))
+        """Capped at FLAG_SHAS: the check only needs to know there are some (a cache mark holds as many)."""
+        return len(self.trusted_flag_shas(sender_domain, exclude_sha256, FLAG_SHAS))
 
     def recent(self, limit: int) -> list[dict]:
         with self._connect() as conn:
-            cursor = conn.execute(f"SELECT {', '.join(SCANS_COLUMNS)} FROM scans ORDER BY id DESC LIMIT %s", (limit,))
-            return [dict(zip(SCANS_COLUMNS, values)) for values in cursor.fetchall()]
+            return [dict(zip(SCANS_COLUMNS, values)) for values in conn.execute(LATEST_SQL, (limit,)).fetchall()]
+
+
+def migrate(conn, lock_wait: float = MIGRATION_LOCK_WAIT) -> list[str]:
+    """The schema steps, each run only when needed. Returns what was done."""
+    changes = []
+    conn.autocommit = True  # CREATE INDEX CONCURRENTLY can't run inside a transaction
+    try:
+        _take_migration_lock(conn, lock_wait)
+        try:
+            conn.execute(CREATE_TABLE)
+            if not conn.execute(HAS_TRUSTED_SQL).fetchone():
+                # Rewrites the table under an exclusive lock (seconds for 10^5-10^6 rows). Give up after 5 s
+                # rather than queue the app's queries behind a long wait; create_schema retries.
+                conn.execute("SET lock_timeout = '5s'")
+                try:
+                    conn.execute(ADD_TRUSTED)
+                finally:
+                    conn.execute("RESET lock_timeout")
+                changes.append("added column trusted")
+            valid = conn.execute(INDEX_VALID_SQL, (FLAGS_INDEX,)).fetchone()
+            if valid and not valid[0]:  # left behind by an interrupted CREATE INDEX CONCURRENTLY
+                conn.execute(f"DROP INDEX CONCURRENTLY {FLAGS_INDEX}")
+                changes.append(f"dropped invalid {FLAGS_INDEX}")
+            if not valid or not valid[0]:
+                conn.execute(CREATE_FLAGS_INDEX)  # doesn't block writes
+                changes.append(f"created {FLAGS_INDEX}")
+            if conn.execute(INDEX_VALID_SQL, (OLD_INDEX,)).fetchone():
+                conn.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {OLD_INDEX}")
+                changes.append(f"dropped {OLD_INDEX}")
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
+    finally:
+        conn.autocommit = False
+    return changes
+
+
+def _take_migration_lock(conn, wait: float) -> None:
+    # Polls pg_try_advisory_lock instead of blocking in pg_advisory_lock: an instance waiting inside a statement
+    # holds a snapshot, CREATE INDEX CONCURRENTLY in the instance that has the lock waits for it, and PostgreSQL
+    # ends that with "deadlock detected" for the index build (seen in a local test; polling builds at once).
+    deadline = time.monotonic() + wait
+    while not conn.execute("SELECT pg_try_advisory_lock(%s)", (MIGRATION_LOCK,)).fetchone()[0]:
+        if time.monotonic() > deadline:
+            raise TimeoutError("another instance holds the schema migration lock")
+        time.sleep(0.5)
 
 
 class NoCache:
@@ -160,7 +224,7 @@ class ReputationHistory:
 
     - A mark is written only after the scan row is committed, and only for a flag that passes the poisoning rule.
     - Only "flagged" is cached, never "not flagged": a new flag must count on every instance at once, and a miss
-      costs one indexed count in the database. After a miss that finds flags, the mark is restored.
+      costs one index-only lookup of at most FLAG_SHAS entries. After a miss that finds flags, the mark is restored.
     - With a mark, the database isn't asked, so the signal still works while the database is down. Without one,
       a database failure propagates: the scan reports the history as unavailable and stays cautious (D-70).
     - If the cache fails, everything goes to the database.
@@ -177,13 +241,13 @@ class ReputationHistory:
         others = [sha for sha in mark if sha != exclude_sha256]  # an email never flags itself
         if others:
             return len(others)
-        count = self.store.count_trusted_flags(sender_domain, exclude_sha256)
-        if count:
+        shas = self.store.trusted_flag_shas(sender_domain, exclude_sha256, FLAG_SHAS)  # one query for both
+        if shas:
             try:
-                self._add(sender_domain, self.store.trusted_flag_shas(sender_domain, exclude_sha256, FLAG_SHAS))
+                self._add(sender_domain, shas)
             except Exception as exc:  # the answer is already known; the mark comes back next time
                 self.on_cache_error(exc)
-        return count
+        return len(shas)
 
     def remember(self, row: dict) -> None:
         """Call after the row is committed to the database."""

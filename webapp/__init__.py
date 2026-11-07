@@ -77,7 +77,10 @@ def _from_environment() -> dict:
     connect = credentials.database_connect()
     if connect:
         history = PostgresHistory(connect)
-        history.create_schema()
+        started = time.monotonic()
+        changes = history.create_schema()
+        if changes:  # once per migration, from the instance that ran it
+            log_event("schema_migrated", changes=changes, seconds=round(time.monotonic() - started, 2))
     else:
         history = MemoryHistory()
         log_event("history_in_memory", reason="DB_HOST not set; history is lost on restart")

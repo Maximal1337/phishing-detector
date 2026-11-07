@@ -48,10 +48,10 @@ class BrokenHistory(MemoryHistory):
         super().__init__()
         self.fail_read, self.fail_write = fail_read, fail_write
 
-    def count_trusted_flags(self, sender_domain, exclude_sha256):
+    def trusted_flag_shas(self, sender_domain, exclude_sha256, limit):  # count_trusted_flags reads through it
         if self.fail_read:
             raise ConnectionError("database at 10.0.0.5 refused")  # values like this must not reach the log
-        return super().count_trusted_flags(sender_domain, exclude_sha256)
+        return super().trusted_flag_shas(sender_domain, exclude_sha256, limit)
 
     def record(self, row):
         if self.fail_write:
