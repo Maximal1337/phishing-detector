@@ -142,6 +142,20 @@ These commands were run on Linux (a `python:3.13.17-slim` container) and on Wind
 `tests/test_postgres.py` runs only when `TEST_DATABASE_URL` points at a PostgreSQL database, for example the compose one:
 `TEST_DATABASE_URL=postgresql://phishdet:<your DB_PASSWORD>@127.0.0.1:15432/phishdet` (it works in its own schema and drops it).
 
+### CI
+
+`.github/workflows/ci.yml` runs four jobs on every push to `main` and every pull request, with no AWS credentials:
+
+- **tests**: the commands above, with a throwaway PostgreSQL service container (the compose image, by digest), so
+  the PostgreSQL tests run too;
+- **image**: the same `docker build` as `scripts/build_push.sh` (no push), then the container started with the EC2
+  flags (read-only root, no capabilities) and `/healthz` checked;
+- **terraform**: `terraform fmt -check`, `init -backend=false` and `validate` in both roots, tflint with the pinned AWS
+  ruleset;
+- **checkov** on Python 3.12, the version its package supports (locally it runs on 3.13).
+
+Actions are pinned to commit SHAs, and the tool versions match the ones used locally.
+
 ## Deploy to AWS
 
 _Prerequisites and tool versions, the two Terraform stacks and the order to apply them, setting the access secret, building and pushing the image._
@@ -316,7 +330,7 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
 
 ### Scanner findings that are not fixed
 
-`terraform fmt`, `terraform validate`, tflint (with the AWS ruleset) and checkov run before every apply.
+`terraform fmt`, `terraform validate`, tflint (with the AWS ruleset) and checkov run before every apply and in CI.
 Each finding below is skipped in the code with an inline comment, for the reason given.
 
 | Check | Resource | Why it is skipped |
