@@ -199,7 +199,7 @@ instance would carry all traffic for minutes, and a bad image would be found onl
 A rollback is the same path with the previous tag and digest. Both versions share Valkey: a cache entry one version
 can't read counts as a miss (logged as `cache_decode_failed`), never as an error.
 
-Measured on 2026-11-06 with two t3.micro instances, `scripts/smoke_test.py --watch` scanning a sample every 2 seconds
+Measured on 2026-11-06 and 2026-11-07 with two t3.micro instances, `scripts/smoke_test.py --watch` scanning a sample every 2 seconds
 through CloudFront the whole time:
 
 | Change | Instance refresh | Both versions answering | Requests that were not 200 |
@@ -207,6 +207,7 @@ through CloudFront the whole time:
 | rollout 4340dddf6d3d → ce067dbcc400 | 4 min 37 s | about 1.5 min | 0 |
 | rollback ce067dbcc400 → 4340dddf6d3d | 5 min 14 s | about 1 min 50 s | 0 |
 | rollout again → ce067dbcc400 | 4 min 9 s | about 50 s | 0 |
+| rollout → d7263e177739 (2026-11-07) | 4 min 28 s | about 1 min | 0 |
 
 `terraform apply` itself takes about 10 seconds; the refresh runs on after it. A first deployment of the app stack
 (nothing running yet) reached two healthy targets 3 minutes 20 seconds after the apply started.
