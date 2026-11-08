@@ -511,9 +511,10 @@ design: the `AWSServiceRoleForAutoScaling` service-linked role and the empty loc
   ```
 
   then `terraform plan -out=app.tfplan` and `terraform apply app.tfplan` again.
-- **The build is slow on Apple Silicon.** The image is built for x86 (`linux/amd64`, the t3 instances), so Docker
-  Desktop runs the build under emulation; the Rosetta option is in Settings → General. Steps such as `pip install` can
-  stay silent for a while. An arm64 image would not start on the instances.
+- **The build hangs or is very slow on Apple Silicon.** The image is built for x86 (`linux/amd64`, the t3 instances),
+  so Docker Desktop runs the build under emulation. Check that Docker Desktop → Settings → General → "Use Rosetta for
+  x86_64/amd64 emulation on Apple Silicon" is on; it was on in our macOS run. Steps such as `pip install` can stay
+  silent for a while. An arm64 image would not start on the instances.
 - **502 or 503 in the smoke test right after the apply.** The instances or CloudFront aren't ready yet (see step 7).
   Wait until `curl -s "$URL/healthz"` prints `{"status":"ok"}`, then run the smoke test again.
 - **`build_push.sh` says "uncommitted changes".** It refuses to build when the working tree differs from the commit,
