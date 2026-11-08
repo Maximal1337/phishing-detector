@@ -1,7 +1,9 @@
 """Smoke test of a deployed stack, through CloudFront.
 
-    AWS_PROFILE=<profile> python scripts/smoke_test.py https://<distribution>.cloudfront.net
-    AWS_PROFILE=<profile> python scripts/smoke_test.py https://<distribution>.cloudfront.net --watch 900
+    AWS_PROFILE=<profile> python scripts/smoke_test.py https://<distribution>.cloudfront.net --secret-id <name_prefix>/basic-auth
+    AWS_PROFILE=<profile> python scripts/smoke_test.py https://<distribution>.cloudfront.net --secret-id <name_prefix>/basic-auth --watch 900
+
+The secret name is the foundation output auth_secret_name.
 
 --watch SECONDS keeps scanning one sample every 2 seconds during a rollout and reports every
 non-200 answer and every change of the version that answers (/api/version).
@@ -66,7 +68,7 @@ def basic_auth(secret_id: str, region: str) -> tuple[str, str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("url", help="https://<distribution>.cloudfront.net")
-    parser.add_argument("--secret-id", default="phishdet/basic-auth", help="Secrets Manager name of the Basic-auth secret")
+    parser.add_argument("--secret-id", required=True, help="Secrets Manager name of the Basic-auth secret (foundation output auth_secret_name)")
     parser.add_argument("--region", default="eu-north-1")
     parser.add_argument("--watch", type=int, metavar="SECONDS", help="watch a rollout instead of the one-off checks")
     args = parser.parse_args(argv)

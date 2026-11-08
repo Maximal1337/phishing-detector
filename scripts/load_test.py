@@ -1,7 +1,7 @@
 """Load test of the deployed stack through CloudFront: scans only, in concurrency steps.
 
-    AWS_PROFILE=<profile> python scripts/load_test.py https://<distribution>.cloudfront.net --steps 5,10,20,30,50
-    AWS_PROFILE=<profile> python scripts/load_test.py https://<distribution>.cloudfront.net --steps 40 --step-seconds 600
+    AWS_PROFILE=<profile> python scripts/load_test.py https://<distribution>.cloudfront.net --secret-id <name_prefix>/basic-auth --steps 5,10,20,30,50
+    AWS_PROFILE=<profile> python scripts/load_test.py https://<distribution>.cloudfront.net --secret-id <name_prefix>/basic-auth --steps 40 --step-seconds 600
 
 Every worker thread keeps one HTTPS connection and posts the synthetic samples to /api/scan.
 80 % of the scans are unique (a random X-Load-Test header changes the email's SHA-256: a cache
@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("url", help="https://<distribution>.cloudfront.net")
     parser.add_argument("--steps", default="5,10,20,30,50", help="comma-separated thread counts")
     parser.add_argument("--step-seconds", type=int, default=60)
-    parser.add_argument("--secret-id", default="phishdet/basic-auth")
+    parser.add_argument("--secret-id", required=True, help="Secrets Manager name of the Basic-auth secret (foundation output auth_secret_name)")
     parser.add_argument("--region", default="eu-north-1")
     args = parser.parse_args(argv)
     steps = [int(s) for s in args.steps.split(",")]
