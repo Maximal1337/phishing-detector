@@ -9,6 +9,9 @@
 .env
 .venv/
 
+# macOS Finder metadata (anywhere in the tree)
+.DS_Store
+
 # Python
 __pycache__/
 .pytest_cache/
