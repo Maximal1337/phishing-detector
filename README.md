@@ -3,11 +3,7 @@
 A rule-based email phishing detector (command line and web UI) and the Terraform that deploys it on AWS:
 two EC2 instances behind an Application Load Balancer, with scan history in Amazon RDS.
 
-> This README is an outline; each section is filled in as the corresponding part is built.
-
 ## What it does
-
-_Input formats, the indicator families, how the risk score and verdict are computed, example output._
 
 The detector (`phishing_detector/`, Python standard library only) reads one email and reports whether it is likely phishing and why.
 It is rule-based: every point of the score comes from a named indicator with its evidence, and each rule has its own tests.
@@ -58,14 +54,14 @@ Verdict: PHISHING (score 100/100)
 Input: email with headers
 Indicators (9):
   [+30] links.ip_host: A link points to a bare IP address instead of a domain name (hxxp://203[.]0[.]113[.]45:8080/examplebank/verify)
+  [+30] wording.generic_greeting: Generic greeting instead of the recipient's name ("dear customer")
   [+25] auth.dmarc_fail: DMARC failed: the From domain is probably spoofed (dmarc=fail)
+  [+25] wording.credentials: Asks to verify an account or to enter a password ("confirm ... identity")
   [+15] auth.spf_fail: SPF failed: the sending server isn't allowed to send for that domain (spf=fail)
-  [+15] sender.reply_to_mismatch: Replies would go to a different domain than the sender's (replies go to example[.]net)
-  [+15] wording.credentials: Asks to verify an account or to enter a password ("confirm ... identity")
-  [+10] links.nonstandard_port: A link uses an unusual port number (hxxp://203[.]0[.]113[.]45:8080/examplebank/verify)
-  [+10] wording.threat: Threats of suspension, closure or other trouble ("card ... locked"; "unauthorized activity")
-  [+5] sender.return_path_mismatch: The bounce address (Return-Path) is at another domain (common for mailing services too) (bounces go to example[.]net)
-  [+5] wording.generic_greeting: Generic greeting instead of the recipient's name ("dear customer")
+  [+15] wording.threat: Threats of suspension, closure or other trouble ("card ... locked"; "unauthorized activity")
+  [+0] links.nonstandard_port: A link uses an unusual port number (hxxp://203[.]0[.]113[.]45:8080/examplebank/verify)
+  [+0] sender.reply_to_mismatch: Replies would go to a different domain than the sender's (replies go to example[.]net)
+  [+0] sender.return_path_mismatch: The bounce address (Return-Path) is at another domain (common for mailing services too) (bounces go to example[.]net)
 Notes:
   - History check skipped: no scan history was provided.
 ```
@@ -179,11 +175,20 @@ flowchart LR
 
 ## Repository layout
 
-_What lives where._
+| Path | What |
+|---|---|
+| `phishing_detector/` | The detector: parser, rule checks (`checks/`), weights and verdict (`scoring.py`), brand and TLD lists (`data/`), command line (`python -m phishing_detector`). Standard library only. |
+| `webapp/` | The Flask app: routes and logging (`__init__.py`), PostgreSQL history, Valkey caches and the migration (`storage.py`), secrets and the connection pool (`credentials.py`), gunicorn settings, the static UI. |
+| `samples/` | Fifteen synthetic samples (13 emails with headers, 2 body-only texts). |
+| `tests/` | pytest; the PostgreSQL tests run when `TEST_DATABASE_URL` is set. |
+| `scripts/` | `build_push.sh` (image), `smoke_test.py` (checks and rollout watch), `load_test.py`, `history_query_bench.py`, `fetch_datasets.py` and `evaluate.py` (evaluation), `lock_requirements.py`. |
+| `terraform/foundation/` | Network, security groups, RDS, Valkey, ECR, the Basic-auth secret, flow logs. |
+| `terraform/app/` | NAT gateway, ALB, CloudFront, launch template and Auto Scaling group, scaling policy, logs, alarms, dashboard. |
+| `docs/` | `evaluation.md` and the screenshots. |
+| `Dockerfile`, `docker-compose.yml`, `requirements*.txt`, `requirements.lock` | The image and the local stack. |
+| `.github/workflows/ci.yml` | CI. |
 
 ## Run locally
-
-_Command-line scan without Docker; the web app with docker compose; running the tests._
 
 ### Command line (Python 3.13, no dependencies)
 
@@ -252,7 +257,13 @@ Actions are pinned to commit SHAs, and the tool versions match the ones used loc
 
 ## Deploy to AWS
 
-_Prerequisites and tool versions, the two Terraform stacks and the order to apply them, setting the access secret, building and pushing the image._
+**Prerequisites:** an AWS account and an AWS CLI v2 profile for it (not the root user); Terraform 1.17
+(the AWS provider is pinned to 6.71.0); Docker with buildx (the image is built for linux/amd64); Python 3.13 with the
+virtual environment from "Tests" (the smoke test uses boto3); a bash shell. Everything runs in eu-north-1.
+
+**Order:** the foundation first, then the Basic-auth password, then the image and the app stack. The app stack reads
+the foundation's Terraform state. Two steps are manual: setting the password (step 2) and confirming the SNS e-mail
+subscription that AWS sends to `alarm_email` after step 3 (alarms reach you only after that).
 
 ### 1. Foundation (once, before the demo)
 
@@ -322,7 +333,22 @@ through CloudFront the whole time:
 
 ## Invoke
 
-_Using the web UI and the HTTP API on the deployed stack._
+The address is `terraform output -raw url` in `terraform/app` (a `*.cloudfront.net` URL). Log in as `reviewer` with the
+password from step 2.
+
+- **UI:** open the URL, upload a file from `samples/` or paste an email's source, and look at "History of scans".
+- **API with curl** (curl asks for the password, so it stays out of the shell history):
+
+  ```bash
+  URL=$(cd terraform/app && terraform output -raw url)
+  curl -s -u reviewer -F "email=@samples/phishing_spoofed_bank.eml" "$URL/api/scan"
+  curl -s -u reviewer "$URL/api/history?limit=5"
+  curl -s "$URL/healthz"                               # no auth; {"status": "ok"}
+  ```
+
+- **Smoke test:** `AWS_PROFILE=<profile> python scripts/smoke_test.py "$URL"` scans every sample, checks the verdicts,
+  Basic auth, the cache and the history (it reads the password from Secrets Manager itself). With `--watch SECONDS`
+  it scans every 2 seconds and reports every answer that isn't 200, for watching a rollout.
 
 ## Monitor
 
@@ -352,13 +378,54 @@ _Using the web UI and the HTTP API on the deployed stack._
   the failure, with OK mails 1–2 minutes later: load balancer metrics reach CloudWatch with a delay, so the alarms tell
   people what happened; the health check and the Auto Scaling group do the recovery.
 
+The dashboard, target health, alarms, mails, Auto Scaling activity, a saved query and the log groups are in the
+screenshots below (03-12).
+
 ## Tear down
 
-_`terraform destroy` order and the CLI checks that confirm nothing is left._
+```bash
+cd terraform/app && terraform destroy
+cd ../foundation && terraform destroy
+```
+
+The app stack goes first: it uses the foundation's network and security groups. With it go the ALB's log bucket
+(emptied by Terraform), the alarms, the dashboard and the app log groups. The foundation's destroy removes the ECR
+repository with its images (`force_delete`), the Basic-auth secret at once (`recovery_window_in_days = 0`) and RDS
+without a final snapshot; RDS deletes its own password secret with the instance
+([RDS docs](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html)).
+
+What stays: service-linked roles that AWS created on first use, such as `AWSServiceRoleForAutoScaling`; the local
+Terraform state files; and anything set up by hand outside Terraform, such as an AWS Budgets alert. To check that
+nothing tagged is left (the tagging API can lag a few minutes behind a delete):
+
+```bash
+aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=phishing-detector \
+  --profile <profile> --region eu-north-1 --query 'ResourceTagMappingList[].ResourceARN'
+```
 
 ## Cost
 
-_What each resource costs per day and the total for the test period._
+On-demand prices for eu-north-1 (EU (Stockholm)), read on 2026-11-05 from the AWS Price List API. Pricing pages:
+[EC2](https://aws.amazon.com/ec2/pricing/on-demand/), [VPC and public IPv4](https://aws.amazon.com/vpc/pricing/),
+[ELB](https://aws.amazon.com/elasticloadbalancing/pricing/), [RDS](https://aws.amazon.com/rds/postgresql/pricing/),
+[ElastiCache](https://aws.amazon.com/elasticache/pricing/), [Secrets Manager](https://aws.amazon.com/secrets-manager/pricing/),
+[CloudWatch](https://aws.amazon.com/cloudwatch/pricing/). All rows down to Secrets Manager bill by the hour or the
+month, also while nobody uses the app.
+
+| Item | Per day |
+|---|---|
+| NAT gateway ($0.046 per hour) and its public IPv4 address ($0.005 per hour) | $1.22 |
+| Application Load Balancer ($0.02394 per hour, plus load capacity units under traffic) and its 2 public IPv4 addresses | $0.81-1.00 |
+| 2 × t3.micro ($0.0108 per hour each) and their 8 GB gp3 volumes | $0.56 |
+| RDS db.t4g.micro ($0.016 per hour) and 20 GB of gp3 storage | $0.46 |
+| ElastiCache cache.t4g.micro ($0.016 per hour) | $0.38 |
+| Secrets Manager, 2 secrets | $0.03 |
+| CloudWatch agent metrics, alarms, logs | about $0.05 |
+| CloudFront, S3 log bucket, ECR storage | about $0 (CloudFront's always-free tier) |
+| **Total** | **about $3.5-3.7**; the foundation alone about $0.88 |
+
+On top of that: NAT data processing ($0.046 per GB) and CPU above the t3 baseline (below). The NAT gateway, the load
+balancer and the public IPv4 addresses are the idle costs a stopped app doesn't save; destroying the app stack does.
 
 - **CPU credits of the t3.micro instances: unlimited, set explicitly.** In standard mode a t3 gets no launch credits
   ([AWS docs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances-standard-mode-concepts.html)),
@@ -370,8 +437,6 @@ _What each resource costs per day and the total for the test period._
   10 minutes) and the AWS budget alert catch that long before it adds up.
 
 ## Security
-
-_IAM, network exposure, encryption, secrets handling, untrusted email handling, and the justification for every wildcard permission and every skipped scanner check._
 
 - Nothing in the data tier is public: RDS has `publicly_accessible = false`, and RDS and Valkey sit in subnets without a route out of the VPC.
 - Encryption at rest everywhere it is offered (RDS, Valkey, ECR, Secrets Manager, CloudWatch Logs), with AWS-managed keys.
@@ -408,12 +473,12 @@ _IAM, network exposure, encryption, secrets handling, untrusted email handling, 
 - Every push is scanned by ECR (basic scanning); `scripts/build_push.sh` waits for the result, prints the counts and
   stops on an incomplete scan or any CRITICAL finding. The instances run the image by digest (`repository@sha256:…`),
   so EC2 runs exactly the image that was scanned; the tag (the commit) is for people. HIGH findings accepted for now,
-  in the image pushed for deployment (tag 4340dddf6d3d):
+  the same four in every image on this base, including the one deployed last (tag f6caf343a30c):
 
   | CVE | Package (version) | Fix available? | Why accepted |
   |---|---|---|---|
   | CVE-2026-5435, CVE-2026-19499 | glibc (2.41-12+deb13u4) | No: Debian trixie and trixie-security have no newer package (checked 2026-11-06) | Nothing to upgrade to yet. Exposure is limited: non-root, read-only container without capabilities, private subnets, Basic auth in front. The CVE details were not analysed further |
-  | CVE-2026-85091, CVE-2026-76844 | zlib (1.3.dfsg+really1.3.1-1+b1) | No, same check | Same as above |
+  | CVE-2026-85091, CVE-2026-76844 | zlib (1.3.dfsg+really1.3.1-1) | No, same check | Same as above |
 
   Policy: rebuild and redeploy when Debian or a newer `python:3.13-slim` ships a fix; a CRITICAL finding blocks the push.
 - Build attestations are off (`--provenance=false --sbom=false`). They were unsigned and nothing checked them, but they
@@ -457,11 +522,23 @@ Each finding below is skipped in the code with an inline comment, for the reason
 
 ## Assumptions
 
-_How ambiguous points in the assignment were interpreted._
+- **Input:** "a text file containing email content" is a raw email with headers (`.eml`) or just the body text. Body-only
+  input skips the header-based checks and the result says so.
+- **History of actions:** every scan is stored in RDS, shown in the UI and used as a signal ("this sender domain was
+  flagged before"), with the poisoning rule above. RDS stores only the time, the email's SHA-256, the sender domain,
+  the verdict, the score and the signal ids with their weights: no addresses, subject or body.
+- **"Two EC2 instances":** an Auto Scaling group with a minimum of 2 in two Availability Zones; it can grow to 4 under
+  load (the performance bonus).
+- **"RDS may be created in advance":** the foundation stack (RDS, Valkey, network, ECR) is applied before the demo, and
+  the app stack is applied live.
+- **Access:** the reviewers need to open the UI, so it is public over HTTPS through CloudFront, behind Basic auth; only
+  CloudFront can reach the load balancer.
+- **One region**, eu-north-1; nothing that needs us-east-1 or several regions.
+- **AWS features over own code, free tier first:** no paid add-ons (WAF, GuardDuty, Performance Insights, detailed
+  monitoring); the budget is the account's $100 of credits.
+- **Bonuses:** ElastiCache (Valkey) and performance work are done; the Gmail add-on is not.
 
 ## Limitations
-
-_What the detector and the infrastructure do not cover._
 
 - The detector is rule-based: a well-written phishing email with no technical tells (clean domain, no links or attachments,
   neutral wording) scores low. On public data, without the era-biased signals, it catches about 21 % of phishing at the
@@ -479,8 +556,8 @@ _What the detector and the infrastructure do not cover._
     sender domain under the poisoning rule, written only after the scan row is committed to PostgreSQL. This one serves
     campaigns (many different mails from one flagged domain) and resilience: while the database is down, a known-bad
     domain still gets the history signal instead of only a cautious verdict. Only "flagged" is cached, never "not
-    flagged": a new flag has to count on every instance at once, and a miss costs one indexed count in PostgreSQL, after
-    which a found flag restores the mark. A test runs the same sequence of scans with and without Valkey and expects the
+    flagged": a new flag has to count on every instance at once, and a miss costs one index lookup of at most 5 entries in PostgreSQL,
+    after which a found flag restores the mark. A test runs the same sequence of scans with and without Valkey and expects the
     same verdicts.
 - Links wrapped by a mail gateway's link protection are unwrapped statically (Microsoft Safe Links: the `url` parameter;
   Proofpoint URL Defense v2 and v3: their own encoding) and every link check runs on the real target. Mimecast-protected
@@ -507,9 +584,7 @@ _What the detector and the infrastructure do not cover._
 
 ## Data sets
 
-_Source and license of every data set used for testing and evaluation._
-
-- `samples/`: twelve synthetic emails written for this project, using reserved names only
+- `samples/`: fifteen synthetic samples written for this project (13 emails with headers, 2 body-only texts), using reserved names only
   ([RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) domains such as `example.com` and `.test`,
   [RFC 5737](https://www.rfc-editor.org/rfc/rfc5737) documentation addresses) and placeholder attachment bytes.
   `tests/test_samples.py` pins the expected verdict of each.
@@ -832,8 +907,9 @@ Taken on 2026-11-07 in the deployed stack; account numbers and ARNs are blurred.
 
 ## Next steps
 
-_What would come next with more time._
-
+- The Gmail add-on (the assignment's bonus): an Apps Script add-on that sends the open message's source to `/api/scan`
+  and shows the verdict and indicators in the side panel.
+- The stalls under synthetic load: the ordered list under "Stalls under load: diagnosis".
 - Detector, beyond static rules:
   - URL reputation for links that no rule flags ([Google Safe Browsing](https://developers.google.com/safe-browsing),
     [URLhaus](https://urlhaus.abuse.ch/)), sending only the URL, never the email;
