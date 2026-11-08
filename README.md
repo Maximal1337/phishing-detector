@@ -407,6 +407,9 @@ _What the detector and the infrastructure do not cover._
 - The Valkey cache has no AUTH token. Only the app security group can reach it, every connection uses TLS,
   entries expire after 1 hour, and cached results hold no email addresses or subjects.
   The Valkey slow log (CloudWatch Logs, 7 days) can contain truncated command arguments, such as a cache key (an email's SHA-256).
+- The PostgreSQL log (CloudWatch Logs, 7 days) records statements slower than 500 ms with their bind values: an email's
+  SHA-256, the sender domain and the signal ids, never email content. Setting `log_parameter_max_length` to 0 in the
+  parameter group would drop the values.
 
 ## Data sets
 
@@ -498,6 +501,10 @@ include about 80 ms of network. The last column is after the history query fix b
 | CPU, RDS (max) / app instances (max) | 63 % / 42 % | 33 % / 41 % | 62 % / 72 % | **20 %** / 88 % |
 | Rows in `scans` | ≈ 15 000 | ≈ 60 000 | ≈ 105 000 | ≈ 258 000 |
 
+The stalls described below don't touch the gthread and fix columns. In those two windows the RDS log shows no
+ANALYZE longer than 10 s (shorter ones aren't logged), and the server answered every scan within 1 s: 524 ms and
+229 ms at most.
+
 - **How the monitoring led to the cause.** In the first run throughput stopped at 52 requests/s while the app
   instances were at 42 % CPU and RDS at 63 %: the app wasn't busy, the database was. Every history call opened a new
   TLS connection, and PostgreSQL starts a new process for each. A small pool per worker (psycopg_pool, opened after
@@ -562,11 +569,12 @@ include about 80 ms of network. The last column is after the history query fix b
   - scale-in went one instance at a time: 4 → 3 seventeen minutes after the load, 3 → 2 about five minutes later. The
     stopped instances shut down cleanly in 0.4 s, and the full `terraform plan` afterwards had no changes.
 
-  With 4 instances, requests stalled together. About every 70 seconds all 32 connections (4 instances × 2 workers ×
-  4) stopped for 2-14 s, and the slow requests on every instance ended in the same second. Throughput swung between
-  268 and 437 requests/s and client p99 reached 1 s; no request failed. See the diagnosis below.
+  During the run, requests stalled together. About every 70 seconds every connection stopped for 2-14 s, and the
+  slow requests on every instance ended in the same second. Throughput swung between 268 and 437 requests/s and client
+  p99 reached 1 s; no request failed. The diagnosis below ties the stalls to automatic ANALYZE, not to the number of
+  instances.
 - **The maximum of 4 instances** stays. The task needs 2, and 2 instances have a large margin: 297 requests/s at 20 %
-  RDS CPU. Above that, the stalls set the limit, not RDS CPU (44 % at 437 requests/s).
+  RDS CPU.
 
 ### Stalls under load: diagnosis (2026-11-07)
 
@@ -576,15 +584,17 @@ read-only connection through SSM, `pg_stat_activity` was sampled every 0.5 s. Be
 
 **What was observed.**
 - Five stalls in 10 minutes, 4-52 s long, the longest request 16 s.
-- Three of them came while the group still had 2 instances (16 connections). The number of connections isn't the
-  trigger.
+- Three of them came while the group still had 2 instances (16 connections). The number of instances and connections
+  isn't the trigger.
 
 **Every stall was an automatic ANALYZE of `scans`.**
 - The RDS log logs ANALYZE runs longer than 10 s. Each stall started and ended in the same seconds as one of them:
   5 of 5 in this run and 5 of 5 in the run before.
 - Each ANALYZE took 18-52 s but used only 2-5 s of CPU.
-- It ran every 1-2 minutes because the load test inserts about 300 rows a second. Autovacuum analyzes a table again
-  after 10 % of its rows change.
+- **How often depends on the insert rate.** Autovacuum analyzes a table again after 5 % of its rows have changed
+  (`autovacuum_analyze_scale_factor` 0.05, the RDS setting). The load test inserts about 300 rows a second, so here
+  ANALYZE ran every 1-2 minutes. That's a property of the synthetic load: a real mail flow changes the table far more
+  slowly, so ANALYZE would be rare.
 
 **What the database showed during a stall.**
 - The sampler's own query didn't return for 8-23 s.
@@ -612,13 +622,12 @@ read-only connection through SSM, `pg_stat_activity` was sampled every 0.5 s. Be
 **How to check.** Turn on Enhanced Monitoring (OS memory, swap in and out per second, the process list) or Database
 Insights (wait events and CPU over time), then run the same test.
 
-**Options, none implemented:**
-- a larger class: db.t4g.small has 2 GiB;
-- RDS Proxy, or fewer connections per instance (less memory in backends);
-- a lighter or rarer ANALYZE for this table: a lower statistics target for `signals` and `email_sha256`, which no
-  query filters on, or a table-level `autovacuum_analyze_scale_factor`;
-- checkpoint tuning: the data doesn't point at checkpoints, so this is the least likely to help;
-- a retention policy or partitions: a smaller table makes each ANALYZE cheaper.
+**What next, in order (none of it implemented or tested):**
+1. Turn off or lower the statistics for `signals` and `email_sha256`: no query filters on them.
+2. Give `scans` its own autoanalyze threshold, so a steady insert rate doesn't analyze it every minute or two.
+3. Turn on Enhanced Monitoring and repeat the same test, to confirm the mechanism.
+4. A retention period for scans, or monthly partitions: a smaller table makes each ANALYZE cheaper.
+5. A larger database class.
 
 ### The history query (D-112, D-113)
 
@@ -707,7 +716,7 @@ things worse: 71-82 requests/s at 98 % RDS CPU.
   roll-forward drops it.
 
 **Next steps:** a retention policy for scans (the check only needs recent history), or monthly partitions so old scans
-are dropped a partition at a time. Beyond that, RDS Proxy or a larger database class.
+are dropped a partition at a time. Beyond that, a larger database class.
 
 ## Screenshots
 
