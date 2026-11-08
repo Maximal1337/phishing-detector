@@ -23,7 +23,8 @@ resource "aws_db_parameter_group" "postgres" {
     apply_method = "pending-reboot"
   }
 
-  # Log statements slower than 500 ms (statement text only, no bind values).
+  # Log statements slower than 500 ms. Bind values are logged too (log_parameter_max_length is the
+  # default, -1): an email's SHA-256, the sender domain and signal ids, never email content (README).
   parameter {
     name  = "log_min_duration_statement"
     value = "500"

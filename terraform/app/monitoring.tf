@@ -8,7 +8,7 @@ locals {
   tg_dimensions     = { LoadBalancer = aws_lb.main.arn_suffix, TargetGroup = aws_lb_target_group.app.arn_suffix }
   alarm_actions     = [aws_sns_topic.alarms.arn]
 
-  # One metric per app failure event (D-70: history; cache problems only on the dashboard).
+  # One metric per app failure event (history failures alarm; cache problems only show on the dashboard).
   log_events = {
     history_read_failed  = "HistoryReadFailed"
     history_write_failed = "HistoryWriteFailed"
@@ -20,7 +20,7 @@ locals {
 # --- notifications ------------------------------------------------------
 
 resource "aws_sns_topic" "alarms" {
-  #checkov:skip=CKV_AWS_26:CloudWatch alarms can't publish to a topic encrypted with aws/sns; a customer-managed key is a next step (README, D-42).
+  #checkov:skip=CKV_AWS_26:CloudWatch alarms can't publish to a topic encrypted with aws/sns; a customer-managed key is a next step (README).
   name = "${local.name_prefix}-alarms"
 }
 

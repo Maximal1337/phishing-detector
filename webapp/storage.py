@@ -1,6 +1,6 @@
 """Scan history (PostgreSQL, or memory for tests and quick local runs) and the result cache (Valkey, or none).
 
-The history keeps only what D-10 allows: time, the email's SHA-256, the sender domain,
+The history keeps only: time, the email's SHA-256, the sender domain,
 verdict, score and signal ids with weights. No addresses, subject, body or evidence.
 """
 
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS scans (
 )
 """
 
-# The poisoning rule (D-09) as a stored column, computed by PostgreSQL from `signals`: true when the scan passed
+# The poisoning rule (README, "History without poisoning") as a stored column, computed by PostgreSQL from `signals`: true when the scan passed
 # DMARC for its domain or the domain was a lookalike. Same rule as phishing_detector's InMemoryHistory. Any writer
 # fills it, also an older app version during a rollout. Changing TRUSTED_SIGNALS needs a new column (a migration).
 TRUSTED_EXPRESSION = " OR ".join(f"signals @> '{json.dumps([{'id': s}], separators=(',', ':'))}'" for s in TRUSTED_SIGNALS)
@@ -44,7 +44,7 @@ ADD_TRUSTED = f"ALTER TABLE scans ADD COLUMN trusted boolean GENERATED ALWAYS AS
 # ORDER BY email_sha256 is there for the planner, not for the result: only this index returns rows in that order,
 # so it's the only plan that can stop after FLAG_SHAS rows. Without it, the LIMIT made a sequential scan look
 # cheap whenever the planner expected many matches (it treats domain, verdict and trusted as independent), and for
-# a domain with no flags that scan read the whole table (seen on RDS, D-112). ORDER BY id did the same through
+# a domain with no flags that scan read the whole table (seen on RDS). ORDER BY id did the same through
 # the primary key.
 FLAGS_INDEX = "scans_trusted_flag_shas"
 INDEX_VALID_SQL = "SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)"
@@ -116,7 +116,7 @@ class PostgresHistory:
         self._connect = connect
 
     def create_schema(self, attempts: int = 10, delay: float = 3.0) -> list[str]:
-        """Create or upgrade the table (D-112); retried while the database is still starting.
+        """Create or upgrade the table; retried while the database is still starting.
 
         Returns the changes made, [] when the schema was already current. Safe on every start of every instance at
         once: the instances take turns under an advisory lock, and each step is skipped when it's already done.
@@ -237,7 +237,7 @@ class ReputationHistory:
     - Only "flagged" is cached, never "not flagged": a new flag must count on every instance at once, and a miss
       costs one index-only lookup of at most FLAG_SHAS entries. After a miss that finds flags, the mark is restored.
     - With a mark, the database isn't asked, so the signal still works while the database is down. Without one,
-      a database failure propagates: the scan reports the history as unavailable and stays cautious (D-70).
+      a database failure propagates: the scan reports the history as unavailable and stays cautious.
     - If the cache fails, everything goes to the database.
     """
 

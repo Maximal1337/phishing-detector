@@ -659,7 +659,7 @@ Measured on 2026-11-07 with `scripts/load_test.py` from a PC through CloudFront:
 20 % repeats, one minute per step, two t3.micro instances (each run ended before the group scaled out). Client times
 include about 80 ms of network. The last column is after the history query fix below.
 
-| | Before (sync, new DB connection per call) | + connection pool | + 2 workers × 4 threads (gthread) | + history query fix (D-112, D-113) |
+| | Before (sync, new DB connection per call) | + connection pool | + 2 workers × 4 threads (gthread) | + history query fix |
 |---|---|---|---|---|
 | Requests/s at 5 / 10 / 20 / 30 / 50 concurrent | 33 / 53 / 53 / 52 / 52 | 48 / 96 / 124 / 96 / 137 | 47 / 91 / 163 / 217 / 243 | 49 / 93 / 182 / 249 / **297** |
 | Client p50 / p95 at 10 concurrent | 177 / 274 ms | 102 / 120 ms | 107 / 135 ms | 103 / 143 ms |
@@ -798,7 +798,7 @@ Insights (wait events and CPU over time), then run the same test.
 4. A retention period for scans, or monthly partitions: a smaller table makes each ANALYZE cheaper.
 5. A larger database class.
 
-### The history query (D-112, D-113)
+### The history query
 
 **How it was found.** In the first scale-out test, a third instance made things worse: throughput fell from 231 to
 145 requests/s while RDS CPU reached 98 %. The history check counted the earlier trusted phishing verdicts of the

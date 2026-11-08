@@ -51,7 +51,7 @@ resource "aws_launch_template" "app" {
   }
   vpc_security_group_ids = [local.foundation.app_security_group_id]
 
-  # Unlimited credits, set explicitly (D-30): t3 in standard mode gets no launch credits, so a new
+  # Unlimited credits, set explicitly: t3 in standard mode gets no launch credits, so a new
   # instance would boot at the 10 % baseline and miss the 180 s health-check grace. Unlimited costs
   # extra only while the average CPU stays above the baseline (README, "Cost").
   credit_specification {

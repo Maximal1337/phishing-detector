@@ -53,7 +53,7 @@ def log_event(event: str, **fields) -> None:
 
 
 class LoggedHistory:
-    """Wraps the store so every read or write failure leaves a countable log line (D-70)."""
+    """Wraps the store so every read or write failure leaves a countable log line."""
 
     def __init__(self, store) -> None:
         self.store = store
@@ -199,7 +199,7 @@ def create_app(
         row = scan_row(result)
         try:
             history.record(row)
-        except Exception as exc:  # the scan result still goes back to the user (D-70)
+        except Exception as exc:  # the scan result still goes back to the user
             log_event("history_write_failed", error=type(exc).__name__, request_id=g.request_id)
         else:
             reputation.remember(row)  # only after the commit, so a mark never runs ahead of the database

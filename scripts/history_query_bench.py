@@ -1,4 +1,4 @@
-"""Time the history check's query before and after D-112 on tables of growing size, in a throwaway schema.
+"""Time the history check's query before and after the partial index on tables of growing size, in a throwaway schema.
 
     TEST_DATABASE_URL=postgresql://phishdet:<password>@127.0.0.1:15432/phishdet python scripts/history_query_bench.py --rows 150000,1500000
 

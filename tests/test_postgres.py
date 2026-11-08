@@ -37,7 +37,7 @@ OLD_COUNT = (
 )
 OLD_COUNT_PARAMS = [json.dumps([{"id": "auth.dmarc_pass"}]), json.dumps([{"id": "sender.lookalike_domain"}])]
 
-# Rows made by the database itself, shaped like the load test that exposed a bad plan on RDS (D-112): legitimate
+# Rows made by the database itself, shaped like the load test that exposed a bad plan on RDS: legitimate
 # mail from a few domains passes DMARC (trusted, but not phishing), a spoofed domain sends phishing that is never
 # trusted, and a lookalike campaign (phishing, every row trusted) arrives last, at the end of the table.
 FILL = """
