@@ -174,7 +174,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_free_storage" {
 
 resource "aws_cloudwatch_metric_alarm" "history_store_errors" {
   alarm_name          = "${local.name_prefix}-history-store-errors"
-  alarm_description   = "The scan history (RDS) failed to read or write at least once in 5 minutes; scans fall back to cautious verdicts (D-70)."
+  alarm_description   = "The scan history (RDS) failed to read or write at least once in 5 minutes; scans fall back to cautious verdicts (see README, \"When the history is unavailable\")."
   evaluation_periods  = 1
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
