@@ -16,8 +16,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project = "phishing-detector"
-      Stack   = "foundation"
+      Project    = "phishing-detector"
+      Stack      = "foundation"
+      NamePrefix = var.name_prefix # tells copies of the stacks in one account apart
     }
   }
 }

@@ -16,8 +16,9 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project = "phishing-detector"
-      Stack   = "app"
+      Project    = "phishing-detector"
+      Stack      = "app"
+      NamePrefix = local.name_prefix # from the foundation state (data.tf)
     }
   }
 }

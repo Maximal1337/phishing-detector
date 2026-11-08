@@ -396,10 +396,11 @@ without a final snapshot; RDS deletes its own password secret with the instance
 
 What stays: service-linked roles that AWS created on first use, such as `AWSServiceRoleForAutoScaling`; the local
 Terraform state files; and anything set up by hand outside Terraform, such as an AWS Budgets alert. To check that
-nothing tagged is left (the tagging API can lag a few minutes behind a delete):
+nothing of this copy is left (every resource that takes tags has `Project` and `NamePrefix`, so copies with other
+prefixes don't show up; the tagging API can lag a few minutes behind a delete):
 
 ```bash
-aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=phishing-detector \
+aws resourcegroupstaggingapi get-resources --tag-filters Key=NamePrefix,Values=<name_prefix> \
   --profile <profile> --region eu-north-1 --query 'ResourceTagMappingList[].ResourceARN'
 ```
 
