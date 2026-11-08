@@ -230,6 +230,11 @@ Open http://127.0.0.1:8000, upload a file from `samples/` or paste an email's so
 email says "from cache"; every scan appears under "History of scans". Stop with `docker compose down`
 (`down -v` also deletes the local database). Without `DB_HOST` the app keeps its history in memory instead.
 
+The compose project name is fixed (`phishing-detector`), so every clone uses the same database volume, and PostgreSQL
+takes `DB_PASSWORD` only when it first creates that volume. With another password than the first time, in this clone
+or another one, the app stays `unhealthy` and the database log says "password authentication failed". Then
+`docker compose down -v` deletes the volume, and with it the local history.
+
 API: `POST /api/scan` (multipart field `email`, or form field `text`) returns the result as JSON plus `cached`;
 `GET /api/history?limit=20`; `GET /api/version` (image tag and rules version); `GET /healthz` (no auth, only `{"status": "ok"}`).
 
