@@ -35,7 +35,9 @@ never full email addresses or the subject.
 
 **History without poisoning.** An earlier phishing verdict counts against a sender domain only if that email
 passed DMARC for the domain or the domain was itself a lookalike. Otherwise anyone could put a bank's address
-in the From line of a phishing mail and make the bank's real mail look suspicious afterwards.
+in the From line of a phishing mail and make the bank's real mail look suspicious afterwards. The DMARC result
+comes from the email's own Authentication-Results header, which an uploaded file can forge; see "Known
+limitations before production" under Security.
 
 **When the history is unavailable** (for example the database is down), the scan still runs (fail-open),
 but carefully: the result says `history_status: unavailable`, the CLI and the UI show a warning, and if an earlier
@@ -557,6 +559,79 @@ Each finding below is skipped in the code with an inline comment, for the reason
 | CKV_AWS_378 | Target group | HTTP from the ALB to the instances, inside the VPC; TLS on this hop is a next step together with a domain. |
 | CKV_AWS_145 | ALB log bucket | ALB access logs support only SSE-S3, not KMS. |
 | CKV_AWS_18, CKV_AWS_21, CKV_AWS_144, CKV2_AWS_62 | ALB log bucket | It is the log bucket itself: no access log of it, no versioning or replica for 7-day logs, no event consumers. |
+
+### Known limitations before production
+
+Two weaknesses found in a review on 2026-11-08 and confirmed locally; neither is fixed in this version.
+
+**1. A crafted email of a few dozen KB stops a worker.**
+
+- *What.* Three patterns of the form `[\w.+-]+@…` take time that grows with the square of a run of letters or
+  digits without an `@`: `_ADDRESS` in `checks/common.py` (it hides addresses in every URL shown as evidence),
+  `_EMAIL` in `checks/links.py` (an address in a link's query, fragment or base64 token) and `_ADDRESS_IN_NAME` in
+  `checks/sender.py` (an address in the From display name). So does the greeting pattern
+  `^\s*hello (?:user|customer)\b` in `checks/wording.py` on many blank lines, because `\s` also matches line breaks.
+- *Conditions.* The Basic-auth password; an email within the upload limit, which is the app's own 1 MB (`413` above
+  it; pasted text: 500 KB, the Werkzeug form-field default). CloudFront, the ALB and gunicorn set no body limit here.
+- *Measured* (full analysis on a Windows PC, Python 3.13): a link followed by 10 000 / 40 000 letters, 0.6 / 9.6 s.
+  Four times the length takes sixteen times as long, so 1 MB would take hours. The same holds for a link with an IP
+  host (0.4 / 6.2 s), a long base64 path (0.4 / 6.3 s), a Proofpoint-wrapped link (0.4 / 6.4 s), a long From display
+  name (0.3 / 3.7 s) and 5 000 / 20 000 blank lines (0.16 / 2.1 s). For comparison, 1 MB of ordinary text takes 0.6 s
+  and a 1 MB base64 attachment 0.03 s. Linear, but over a second at 1 MB: a 1 MB Authentication-Results header
+  (5.6 s, in the standard library's header parsing), a host name with 500 000 labels (1.8 s), a 1 MB link text (1.2 s).
+- *Effect on the service.* Python's `re` keeps the interpreter lock for a whole call: during one 3.95 s search, another
+  thread of the same process didn't run at all. A slow scan therefore stops all four threads of its gunicorn worker,
+  while the other worker keeps serving. In the app container (2 workers × 4 threads, as on EC2):
+  - one or two slow 50 KB scans: `/healthz` and normal scans stayed at 0.0 s (both slow scans ran in one worker);
+  - four at once: `/healthz` waited 15.6 s and a normal scan 10.1 s, and gunicorn killed a worker after its 30 s
+    timeout (`WORKER TIMEOUT`), cutting off the requests it held;
+  - one 100 KB scan: its worker was killed after about 32 s.
+
+  The ALB health check waits 5 s and needs 2 failures 15 s apart. A handful of such requests per instance, repeated,
+  would therefore take targets out of service; with two instances, about eight at once would hold every worker. Both
+  of these follow from the settings and weren't tried in AWS.
+- *What already limits it.* Only holders of the Basic-auth password can send scans. The upload limit is 1 MB
+  (500 KB for pasted text) and the link list is capped at 200. gunicorn's 30 s timeout kills a stuck worker, and a
+  new one starts by itself; one stuck worker leaves the other one serving.
+- *How to fix.*
+  - Cap the length of the analysed text, of each URL, header and display name before the rules run.
+  - Anchor the address patterns so a run is tried only from its start, `(?<![\w.+-])[\w.+-]+(?:@|%40)…`, and match the
+    greeting with `^[^\S\n]*`. Tried locally: 1 MB of letters or line breaks in 0.02 s, with the same matches on
+    ordinary input.
+  - Add a regex test with hostile inputs and a time budget to CI.
+  - Run the analysis in a separate process with a hard timeout, so a slow scan fails alone instead of stopping its
+    worker; and set a request-size limit at the edge.
+
+**2. A forged Authentication-Results header turns a real domain's mail suspicious.**
+
+- *What.* `auth.dmarc_pass` comes from the topmost Authentication-Results header of the uploaded email, and its
+  authserv-id (which server wrote the header) is skipped, not checked. "Topmost" protects against headers added by a
+  sender in transit, but here the whole file comes from the uploader, so any header can be forged. A phishing
+  verdict with `auth.dmarc_pass` is one of the "trusted" flags that the history check counts against the domain.
+- *Conditions.* The Basic-auth password and one upload: From the target domain, a forged
+  `dmarc=pass header.from=<domain>` and phishing content (a score of at least 50).
+- *Measured* (the app's `/api/scan` through Flask's test client, in-memory history, synthetic domain
+  `news.shop.example`). The forged mail, its header written by `mx.attacker.example`, got phishing, score 100, with
+  `auth.dmarc_pass`. After it, every other mail from that domain got `history.domain_flagged` (+20). Samples
+  re-addressed to the domain went from 0 to 20 (still likely legitimate) and from 10 to 30 (likely legitimate to
+  suspicious). One re-addressed sample scored 30 to begin with and went to 50 (suspicious to phishing).
+- *How long it lasts.* One mail is enough: any count of trusted flags gives the full +20. The Valkey mark lasts 7 days
+  and is rebuilt from PostgreSQL on a miss. The rows in PostgreSQL are never deleted (no retention), so the flag stays
+  until someone removes them.
+- *What already limits it.*
+  - Uploading needs the Basic-auth password.
+  - The effect is one fixed +20, so a clean mail scored 0 stays likely legitimate; only mail already at 5-49 changes
+    verdict.
+  - The forged mail itself has to score phishing, and it affects one domain per mail.
+  - The evidence says "N earlier phishing scan(s) from <domain>", so the reason is visible. The cap of 5 SHA-256s
+    only bounds the cache entry, not the effect.
+- *How to fix.*
+  - Trust only the topmost Authentication-Results whose authserv-id is our own receiving server, and treat any other
+    as absent ([RFC 8601, section 5](https://www.rfc-editor.org/rfc/rfc8601#section-5)). That needs mail to arrive
+    through a server we run, or through the Gmail add-on, where the receiving server's header is on top.
+  - Alternatively, check SPF, DKIM and DMARC ourselves when the mail is received.
+  - Don't let uploaded files count toward a domain's reputation at all. Flag a domain only on reports from several
+    independent senders, with an expiry.
 
 ## Assumptions
 
