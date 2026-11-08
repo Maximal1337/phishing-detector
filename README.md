@@ -72,16 +72,110 @@ Notes:
 
 ## Architecture
 
-_Diagram and request flow: CloudFront, ALB, Auto Scaling group of two EC2 instances, RDS PostgreSQL, ElastiCache, logging and monitoring._
+```mermaid
+flowchart LR
+  user(["Browser"])
 
-- **Two Terraform stacks.** `terraform/foundation` holds what is slow to create or keeps data: the network, all security groups,
-  RDS PostgreSQL, ElastiCache Valkey, the ECR repository, the Basic-auth secret and VPC flow logs.
-  `terraform/app` (load balancer, CloudFront, instances, monitoring) reads the foundation's outputs and is applied and destroyed on its own.
-- **Three subnet tiers in two Availability Zones.** Public: the load balancer and the NAT gateway only, no automatic public IPs.
-  App: the instances, outbound only through the NAT gateway and a free S3 gateway endpoint. Data: RDS and Valkey, with no route out of the VPC.
-- **Security groups reference each other instead of address ranges:**
-  CloudFront origin-facing prefix list → load balancer :80 → app :8000 → PostgreSQL :5432 and Valkey :6379.
-  The data-tier groups have no outbound rules, and the VPC's default security group is emptied.
+  subgraph aws["AWS, eu-north-1"]
+    cf["CloudFront<br/>HTTPS, no caching"]
+
+    subgraph vpc["VPC, two Availability Zones"]
+      subgraph pub["Public subnets"]
+        alb["Application Load Balancer"]
+        nat["NAT gateway"]
+      end
+      subgraph appnet["Private app subnets"]
+        subgraph inst["EC2 Auto Scaling group: 2-4 × t3.micro, scales on requests per target"]
+          host["Amazon Linux 2023 host<br/>Docker, CloudWatch agent"]
+          subgraph ctr["Docker container"]
+            app["gunicorn gthread<br/>2 workers × 4 threads<br/>Flask app, Basic auth"]
+            pool["psycopg pool<br/>up to 4 connections per worker"]
+          end
+        end
+      end
+      subgraph datanet["Private data subnets, no route out"]
+        rds[("RDS PostgreSQL 18<br/>db.t4g.micro, single-AZ")]
+        valkey[("ElastiCache Valkey 8.2<br/>one cache.t4g.micro node")]
+      end
+      s3ep["S3 gateway endpoint"]
+    end
+
+    subgraph svc["Regional services"]
+      ecr["ECR<br/>app image"]
+      sm["Secrets Manager<br/>Basic-auth secret, RDS password"]
+    end
+
+    subgraph mon["Monitoring"]
+      cwl["CloudWatch Logs"]
+      alarms["CloudWatch alarms"]
+      dash["CloudWatch dashboard"]
+      sns["SNS topic"]
+    end
+  end
+
+  user -->|"HTTPS, Basic auth"| cf
+  cf -->|"HTTP :80, only the CloudFront prefix list"| alb
+  alb -->|"HTTP :8000, only from the ALB; health check /healthz"| app
+  app --> pool
+  pool -->|"TLS :5432"| rds
+  app -->|"TLS :6379"| valkey
+  host -->|"HTTPS :443"| nat
+  nat -->|"pull image by digest"| ecr
+  nat -->|"read secrets"| sm
+  host -->|"image layers"| s3ep
+
+  host -.->|"awslogs, CloudWatch agent"| cwl
+  cwl -.->|"metric filters"| alarms
+  alb -.->|"metrics"| alarms
+  alarms -.->|"ALARM and OK"| sns
+  cwl -.->|"logs, metrics"| dash
+```
+
+- **CloudFront:** HTTPS for viewers with the default `*.cloudfront.net` certificate; caching is off. It reaches the load
+  balancer over HTTP, because without a domain there is no certificate for the load balancer.
+- **Application Load Balancer:** in the public subnets. It accepts only CloudFront's origin-facing prefix list, checks
+  `/healthz` on every instance every 15 s, and writes access logs to S3.
+- **Auto Scaling group:** 2 to 4 t3.micro instances in the private app subnets of two Availability Zones. Instance refresh
+  rolls out a new image; target tracking on requests per instance adds instances under load.
+- **Host:** Amazon Linux 2023. systemd runs the container and restarts it; the CloudWatch agent sends memory, disk and
+  the boot log; the SSM agent gives shell access without SSH.
+- **Container:** gunicorn with 2 workers × 4 threads serves the Flask app (UI and API) behind Basic auth. Read-only root
+  filesystem, no Linux capabilities.
+- **Connection pool:** psycopg_pool, up to 4 connections per worker, opened after gunicorn forks; replaces connections
+  the database dropped.
+- **RDS PostgreSQL 18:** the scan history (table `scans`). TLS is required. Single-AZ, in the data subnets.
+- **ElastiCache Valkey 8.2:** two small caches, the email's analysis and the domain marks. TLS, one node.
+- **NAT gateway:** outbound HTTPS for the instances (ECR, Secrets Manager, CloudWatch). One, in the first zone.
+- **S3 gateway endpoint:** image layers and Amazon Linux packages come from S3 without going through the NAT gateway.
+  It costs nothing.
+- **ECR:** the app image. Tags are immutable, every push is scanned, and the instances pull by digest.
+- **Secrets Manager:** the Basic-auth credentials (set by the operator) and the RDS-managed database password.
+- **CloudWatch Logs:** app JSON lines (awslogs), boot logs, PostgreSQL and Valkey logs, VPC flow logs; kept 7 days.
+- **CloudWatch alarms and dashboard:** six alarms with OK notices, fed by load balancer, EC2 and RDS metrics and by
+  metric filters on the app log; the dashboard `phishdet-overview` shows the same.
+- **SNS topic:** e-mails the ALARM and OK notices.
+
+Two Terraform stacks: `terraform/foundation` holds what is slow to create or keeps data (network, security groups,
+RDS, Valkey, ECR, the Basic-auth secret, flow logs); `terraform/app` holds the rest and is applied and destroyed on its
+own. Security groups reference each other instead of address ranges, the data-tier groups have no outbound rules, and
+the data subnets have no route out of the VPC.
+
+**One scan in the app** (`webapp/__init__.py`, `webapp/storage.py`):
+
+```mermaid
+flowchart LR
+  req(["POST /api/scan"]) --> static{"Analysis cached?<br/>Valkey static:#lt;rules_version#gt;:#lt;sha256#gt;"}
+  static -->|"miss"| analyze["Parse the email, run the rules<br/>headers, sender, links, wording, attachments"]
+  analyze -.->|"save for 1 h, unless the history is down"| static
+  static -->|"hit"| mark{"Domain flagged?<br/>Valkey flag:#lt;rules_version#gt;:#lt;domain#gt;"}
+  analyze --> mark
+  mark -->|"no mark"| query[("RDS: up to 5 trusted flags<br/>index-only scan")]
+  query -->|"restore the mark if found"| score
+  mark -->|"mark found"| score["Score and verdict<br/>sum of weights, capped at 100"]
+  score --> insert[("RDS: INSERT INTO scans")]
+  insert -->|"after the commit, trusted flags only"| remember["Valkey: add the email to the domain's mark"]
+  insert --> resp(["JSON result"])
+```
 
 ## Repository layout
 
