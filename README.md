@@ -562,7 +562,9 @@ Each finding below is skipped in the code with an inline comment, for the reason
 
 ### Known limitations before production
 
-Two weaknesses found in a review on 2026-11-08 and confirmed locally; neither is fixed in this version.
+Two weaknesses found in a review on 2026-11-08 and confirmed locally. Neither shows up with ordinary mail: each needs
+a user who has the Basic-auth password and an email crafted for the purpose. Both fixes are known and were tried
+locally; the code is left unchanged in this version.
 
 **1. A crafted email of a few dozen KB stops a worker.**
 
@@ -571,14 +573,16 @@ Two weaknesses found in a review on 2026-11-08 and confirmed locally; neither is
   `_EMAIL` in `checks/links.py` (an address in a link's query, fragment or base64 token) and `_ADDRESS_IN_NAME` in
   `checks/sender.py` (an address in the From display name). So does the greeting pattern
   `^\s*hello (?:user|customer)\b` in `checks/wording.py` on many blank lines, because `\s` also matches line breaks.
-- *Conditions.* The Basic-auth password; an email within the upload limit, which is the app's own 1 MB (`413` above
-  it; pasted text: 500 KB, the Werkzeug form-field default). CloudFront, the ALB and gunicorn set no body limit here.
+- *Not with ordinary mail.* 1 MB of ordinary text takes 0.6 s to analyse, and a 1 MB base64 attachment 0.03 s.
+- *Conditions.* An authenticated user (the Basic-auth password) and a crafted email within the upload limit, which is
+  the app's own 1 MB (`413` above it; pasted text: 500 KB, the Werkzeug form-field default). CloudFront, the ALB and
+  gunicorn set no body limit here.
 - *Measured* (full analysis on a Windows PC, Python 3.13): a link followed by 10 000 / 40 000 letters, 0.6 / 9.6 s.
   Four times the length takes sixteen times as long, so 1 MB would take hours. The same holds for a link with an IP
   host (0.4 / 6.2 s), a long base64 path (0.4 / 6.3 s), a Proofpoint-wrapped link (0.4 / 6.4 s), a long From display
-  name (0.3 / 3.7 s) and 5 000 / 20 000 blank lines (0.16 / 2.1 s). For comparison, 1 MB of ordinary text takes 0.6 s
-  and a 1 MB base64 attachment 0.03 s. Linear, but over a second at 1 MB: a 1 MB Authentication-Results header
-  (5.6 s, in the standard library's header parsing), a host name with 500 000 labels (1.8 s), a 1 MB link text (1.2 s).
+  name (0.3 / 3.7 s) and 5 000 / 20 000 blank lines (0.16 / 2.1 s). Linear, but over a second at 1 MB: a 1 MB
+  Authentication-Results header (5.6 s, in the standard library's header parsing), a host name with 500 000 labels
+  (1.8 s), a 1 MB link text (1.2 s).
 - *Effect on the service.* Python's `re` keeps the interpreter lock for a whole call: during one 3.95 s search, another
   thread of the same process didn't run at all. A slow scan therefore stops all four threads of its gunicorn worker,
   while the other worker keeps serving. In the app container (2 workers × 4 threads, as on EC2):
@@ -596,8 +600,8 @@ Two weaknesses found in a review on 2026-11-08 and confirmed locally; neither is
 - *How to fix.*
   - Cap the length of the analysed text, of each URL, header and display name before the rules run.
   - Anchor the address patterns so a run is tried only from its start, `(?<![\w.+-])[\w.+-]+(?:@|%40)…`, and match the
-    greeting with `^[^\S\n]*`. Tried locally: 1 MB of letters or line breaks in 0.02 s, with the same matches on
-    ordinary input.
+    greeting with `^[^\S\n]*`. Tried locally, not committed: 1 MB of letters in 0.018 s (the lookbehind) and 1 MB of
+    line breaks in 0.013 s (the greeting), with the same matches as before on ordinary addresses.
   - Add a regex test with hostile inputs and a time budget to CI.
   - Run the analysis in a separate process with a hard timeout, so a slow scan fails alone instead of stopping its
     worker; and set a request-size limit at the edge.
@@ -608,8 +612,10 @@ Two weaknesses found in a review on 2026-11-08 and confirmed locally; neither is
   authserv-id (which server wrote the header) is skipped, not checked. "Topmost" protects against headers added by a
   sender in transit, but here the whole file comes from the uploader, so any header can be forged. A phishing
   verdict with `auth.dmarc_pass` is one of the "trusted" flags that the history check counts against the domain.
-- *Conditions.* The Basic-auth password and one upload: From the target domain, a forged
-  `dmarc=pass header.from=<domain>` and phishing content (a score of at least 50).
+- *Not with ordinary mail.* Real mail carries the receiving server's own header, and legitimate mail doesn't score
+  phishing, so it never flags its domain.
+- *Conditions.* An authenticated user (the Basic-auth password) and one crafted upload: From the target domain, a
+  forged `dmarc=pass header.from=<domain>` and phishing content (a score of at least 50).
 - *Measured* (the app's `/api/scan` through Flask's test client, in-memory history, synthetic domain
   `news.shop.example`). The forged mail, its header written by `mx.attacker.example`, got phishing, score 100, with
   `auth.dmarc_pass`. After it, every other mail from that domain got `history.domain_flagged` (+20). Samples
@@ -628,7 +634,10 @@ Two weaknesses found in a review on 2026-11-08 and confirmed locally; neither is
 - *How to fix.*
   - Trust only the topmost Authentication-Results whose authserv-id is our own receiving server, and treat any other
     as absent ([RFC 8601, section 5](https://www.rfc-editor.org/rfc/rfc8601#section-5)). That needs mail to arrive
-    through a server we run, or through the Gmail add-on, where the receiving server's header is on top.
+    through a server we run, or through the Gmail add-on, where the receiving server's header is on top. Tried locally,
+    not committed (the same check wrapped to drop a header whose authserv-id isn't the samples' `mx.example.com`): the
+    forged mail still scored phishing but without `auth.dmarc_pass`, so it flagged nothing, and the four re-addressed
+    samples kept their scores (0, 10, 10, 30).
   - Alternatively, check SPF, DKIM and DMARC ourselves when the mail is received.
   - Don't let uploaded files count toward a domain's reputation at all. Flag a domain only on reports from several
     independent senders, with an expiry.
