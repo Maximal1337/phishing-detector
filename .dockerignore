@@ -4,3 +4,6 @@
 !phishing_detector/
 !webapp/
 **/__pycache__
+
+# macOS Finder metadata inside the allowed folders
+**/.DS_Store
