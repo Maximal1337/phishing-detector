@@ -261,6 +261,10 @@ Actions are pinned to commit SHAs, and the tool versions match the ones used loc
 (the AWS provider is pinned to 6.71.0); Docker with buildx (the image is built for linux/amd64); Python 3.13 with the
 virtual environment from "Tests" (the smoke test uses boto3); a bash shell. Everything runs in eu-north-1.
 
+**Names.** Every resource name starts with `name_prefix` (set in `terraform/foundation/terraform.tfvars`, default
+`phishdet`); the names in this README are the default ones. A second copy of both stacks in the same account needs only
+another prefix: the app stack takes it from the foundation's state, and every resource also carries a `NamePrefix` tag.
+
 **Order:** the foundation first, then the Basic-auth password, then the image and the app stack. The app stack reads
 the foundation's Terraform state. Two steps are manual: setting the password (step 2) and confirming the SNS e-mail
 subscription that AWS sends to `alarm_email` after step 3 (alarms reach you only after that).
@@ -269,9 +273,10 @@ subscription that AWS sends to `alarm_email` after step 3 (alarms reach you only
 
 ```bash
 cd terraform/foundation
-cp terraform.tfvars.example terraform.tfvars   # your AWS CLI profile and account ID
+cp terraform.tfvars.example terraform.tfvars   # then edit it: profile, account ID, name_prefix
 terraform init
 terraform apply                                # review the plan, then confirm
+cd ../..
 ```
 
 `allowed_account_ids` makes Terraform refuse to run against any other account.
@@ -280,12 +285,14 @@ The apply took about 11 minutes in our test, mostly RDS and ElastiCache (about 1
 ### 2. Basic-auth password for the web UI
 
 Terraform creates the secret empty, so the password never appears in code, variables or Terraform state.
-Set it from a shell; `read -s` keeps it off the screen and out of the shell history (don't use `"` or `\` in it):
+Set it from a shell; `read -rs` keeps it off the screen and out of the shell history. Type the password and press
+Enter; nothing is shown. Don't use `"` or `\` in it.
 
 ```bash
+SECRET=$(cd terraform/foundation && terraform output -raw auth_secret_name)   # <name_prefix>/basic-auth
 read -rs PW
-aws secretsmanager put-secret-value --profile <your-profile> --region eu-north-1 \
-  --secret-id phishdet/basic-auth \
+aws secretsmanager put-secret-value --profile <profile> --region eu-north-1 \
+  --secret-id "$SECRET" \
   --secret-string "{\"username\":\"reviewer\",\"password\":\"$PW\"}"
 unset PW
 ```
@@ -295,11 +302,14 @@ unset PW
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=eu-north-1 scripts/build_push.sh   # prints image_tag and image_digest
 cd terraform/app
-cp terraform.tfvars.example terraform.tfvars                        # profile, account, image_tag, image_digest
+cp terraform.tfvars.example terraform.tfvars    # then edit it: profile, account, image_tag, image_digest, alarm_email
 terraform init
 terraform plan -out=app.tfplan
 terraform apply app.tfplan
-cd ../.. && AWS_PROFILE=<profile> python scripts/smoke_test.py "$(cd terraform/app && terraform output -raw url)"
+cd ../..
+URL=$(cd terraform/app && terraform output -raw url)
+SECRET=$(cd terraform/foundation && terraform output -raw auth_secret_name)
+AWS_PROFILE=<profile> python scripts/smoke_test.py "$URL" --secret-id "$SECRET"
 ```
 
 In our run, two healthy targets came about 3 minutes 20 seconds after the apply started (cloud-init takes about
@@ -341,14 +351,16 @@ password from step 2.
 
   ```bash
   URL=$(cd terraform/app && terraform output -raw url)
+  SECRET=$(cd terraform/foundation && terraform output -raw auth_secret_name)   # for the smoke test below
   curl -s -u reviewer -F "email=@samples/phishing_spoofed_bank.eml" "$URL/api/scan"
   curl -s -u reviewer "$URL/api/history?limit=5"
   curl -s "$URL/healthz"                               # no auth; {"status": "ok"}
   ```
 
-- **Smoke test:** `AWS_PROFILE=<profile> python scripts/smoke_test.py "$URL"` scans every sample, checks the verdicts,
-  Basic auth, the cache and the history (it reads the password from Secrets Manager itself). With `--watch SECONDS`
-  it scans every 2 seconds and reports every answer that isn't 200, for watching a rollout.
+- **Smoke test:** `AWS_PROFILE=<profile> python scripts/smoke_test.py "$URL" --secret-id "$SECRET"` scans every
+  sample, checks the verdicts, Basic auth, the cache and the history (it reads the password from Secrets Manager
+  itself). With `--watch SECONDS` it scans every 2 seconds and reports every answer that isn't 200, for watching a
+  rollout.
 
 ## Monitor
 
@@ -392,7 +404,12 @@ The app stack goes first: it uses the foundation's network and security groups. 
 (emptied by Terraform), the alarms, the dashboard and the app log groups. The foundation's destroy removes the ECR
 repository with its images (`force_delete`), the Basic-auth secret at once (`recovery_window_in_days = 0`) and RDS
 without a final snapshot; RDS deletes its own password secret with the instance
-([RDS docs](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html)).
+([RDS docs](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/rds-secrets-manager.html)). No step is manual.
+
+The same prefix can be applied again after a destroy. Secrets Manager finishes deleting the Basic-auth secret in the
+background, though, and advises a retry when a secret with the same name is created right after
+([DeleteSecret](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_DeleteSecret.html)); if the
+foundation apply fails on that name, run it again a little later.
 
 What stays: service-linked roles that AWS created on first use, such as `AWSServiceRoleForAutoScaling`; the local
 Terraform state files; and anything set up by hand outside Terraform, such as an AWS Budgets alert. To check that

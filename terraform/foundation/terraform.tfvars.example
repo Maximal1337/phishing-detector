@@ -3,6 +3,10 @@
 aws_profile         = "<your-aws-cli-profile>"
 allowed_account_ids = ["<your-12-digit-account-id>"]
 
+# Start of every resource name and the NamePrefix tag; the app stack takes it from this
+# stack's state. Another prefix gives a second, separate copy of both stacks in the same
+# account: 2-15 characters, lowercase letters, digits and hyphens, starting with a letter.
+name_prefix = "phishdet"
+
 # Optional overrides (defaults shown):
-# region      = "eu-north-1"
-# name_prefix = "phishdet"
+# region = "eu-north-1"

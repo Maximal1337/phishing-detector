@@ -1,5 +1,6 @@
 # Copy to terraform.tfvars (git-ignored) and fill in your own values.
-# Use the same profile and account as the foundation stack.
+# Use the same profile and account as the foundation stack; the name prefix comes
+# from the foundation's state.
 
 aws_profile         = "<your-aws-cli-profile>"
 allowed_account_ids = ["<your-12-digit-account-id>"]
