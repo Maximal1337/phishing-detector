@@ -420,6 +420,7 @@ screenshots below (03-12).
 ```bash
 cd terraform/app && terraform destroy
 cd ../foundation && terraform destroy
+cd ../..
 ```
 
 The app stack goes first: it uses the foundation's network and security groups. With it go the ALB's log bucket
@@ -434,14 +435,29 @@ background, though, and advises a retry when a secret with the same name is crea
 foundation apply fails on that name, run it again a little later.
 
 What stays: service-linked roles that AWS created on first use, such as `AWSServiceRoleForAutoScaling`; the local
-Terraform state files; and anything set up by hand outside Terraform, such as an AWS Budgets alert. To check that
-nothing of this copy is left (every resource that takes tags has `Project` and `NamePrefix`, so copies with other
-prefixes don't show up; the tagging API can lag a few minutes behind a delete):
+Terraform state files (empty after the destroy); and anything set up by hand outside Terraform, such as an AWS Budgets
+alert. To check that nothing of this copy is left, ask Terraform and the services themselves:
+
+```bash
+(cd terraform/app && terraform state list)          # nothing
+(cd terraform/foundation && terraform state list)   # nothing
+aws ec2 describe-instances --profile <profile> --region eu-north-1 --filters Name=tag:NamePrefix,Values=<name_prefix> --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output text
+aws ec2 describe-nat-gateways --profile <profile> --region eu-north-1 --filter Name=tag:NamePrefix,Values=<name_prefix> --query 'NatGateways[].[NatGatewayId,State]' --output text
+aws ec2 describe-volumes --profile <profile> --region eu-north-1 --filters Name=tag:NamePrefix,Values=<name_prefix> --query 'Volumes[].[VolumeId,State]' --output text
+```
+
+Instances should be `terminated` (or no longer listed), NAT gateways `deleted`, and no volumes left.
+
+Every resource that takes tags has `Project` and `NamePrefix`, so the tagging API can list one copy of the stacks:
 
 ```bash
 aws resourcegroupstaggingapi get-resources --tag-filters Key=NamePrefix,Values=<name_prefix> \
   --profile <profile> --region eu-north-1 --query 'ResourceTagMappingList[].ResourceARN'
 ```
+
+It lags well behind deletes, though. In our runs it still listed deleted resources 10 minutes after a destroy, and
+two hours after another one it still listed two instances and the S3 gateway endpoint, although describe calls by
+their IDs no longer found them. An entry there is a leftover only if the service itself still has it.
 
 ## Cost
 
