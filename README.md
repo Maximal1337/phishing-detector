@@ -3,6 +3,9 @@
 A rule-based email phishing detector (command line and web UI) and the Terraform that deploys it on AWS:
 two EC2 instances behind an Application Load Balancer, with scan history in Amazon RDS.
 
+To run it step by step, from a fresh clone to cleanup, follow [docs/simple_run.md](docs/simple_run.md). This README
+is the reference behind those steps.
+
 ## What it does
 
 The detector (`phishing_detector/`, Python standard library only) reads one email and reports whether it is likely phishing and why.
@@ -186,7 +189,7 @@ flowchart LR
 | `scripts/` | `build_push.sh` (image), `smoke_test.py` (checks and rollout watch), `load_test.py`, `history_query_bench.py`, `fetch_datasets.py` and `evaluate.py` (evaluation), `lock_requirements.py`. |
 | `terraform/foundation/` | Network, security groups, RDS, Valkey, ECR, the Basic-auth secret, flow logs. |
 | `terraform/app/` | NAT gateway, ALB, CloudFront, launch template and Auto Scaling group, scaling policy, logs, alarms, dashboard. |
-| `docs/` | `evaluation.md` and the screenshots. |
+| `docs/` | `simple_run.md` (the step-by-step run), `evaluation.md` and the screenshots. |
 | `Dockerfile`, `docker-compose.yml`, `requirements*.txt`, `requirements.lock` | The image and the local stack. |
 | `.github/workflows/ci.yml` | CI. |
 
@@ -270,6 +273,9 @@ every push.
 Actions are pinned to commit SHAs, and the tool versions match the ones used locally.
 
 ## Deploy to AWS
+
+The same steps one by one, with each command on its own, the expected output and the measured times:
+[docs/simple_run.md](docs/simple_run.md).
 
 **Prerequisites** (the versions we ran; Terraform and the provider version are enforced):
 
