@@ -688,7 +688,10 @@ locally; the code is left unchanged in this version.
   two-label suffixes such as `co.uk` and `co.il`.
 - Lookalike detection only protects the brands listed in `phishing_detector/data/brands.txt`; the TLD and shortener lists are hand-picked.
 - Links are judged from their text only (never fetched or resolved), so a clean-looking URL that redirects somewhere bad is not caught.
-- `Authentication-Results` is trusted as written by the receiving server; the detector can't tell which server that was.
+- `Authentication-Results` is trusted as written by the receiving server; the detector can't tell which server that was
+  (see "Known limitations before production" under Security).
+- The UI has no button to clear a chosen file. With a file chosen, the server scans the file and ignores the pasted
+  text; the page says so under the file field, and reloading the page clears the choice.
 
 - One NAT gateway, in the first Availability Zone (eu-north-1a), serves both app subnets, to save the cost of a second one.
   If that zone fails, the instance in the other zone keeps answering requests but loses outbound access
