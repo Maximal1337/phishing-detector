@@ -190,7 +190,21 @@ flowchart LR
 
 ## Run locally
 
-### Command line (Python 3.13, no dependencies)
+The shell blocks in this README are bash (Git Bash on Windows). On macOS, start `bash` first: in the default zsh, a
+`#` comment at the end of a typed or pasted line is not a comment (option `INTERACTIVE_COMMENTS` is off) and becomes
+arguments of the command.
+
+### Python environment (Python 3.13)
+
+```bash
+python3.13 -m venv .venv                  # Windows: py -3.13 -m venv .venv
+source .venv/bin/activate                 # Windows: source .venv/Scripts/activate
+pip install -r requirements-dev.txt
+```
+
+`python` in the commands below is this environment's (the `python3` that comes with macOS may be an older version).
+
+### Command line (no dependencies)
 
 ```bash
 python -m phishing_detector scan samples/phishing_lookalike_sender.eml
@@ -230,13 +244,11 @@ python scripts/lock_requirements.py build/report.json > requirements.lock
 ### Tests
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt      # Windows: .venv\Scripts\pip
-.venv/bin/python -m pytest -q
+python -m pytest -q          # in the environment above
 ```
 
-These commands were run on Linux (a `python:3.13.17-slim` container) and on Windows; CI runs them on
-`ubuntu-latest` for every push. On macOS, use the Linux commands.
+The tests were run on Linux (a `python:3.13.17-slim` container) and on Windows; CI runs them on `ubuntu-latest` for
+every push.
 
 `tests/test_postgres.py` runs only when `TEST_DATABASE_URL` points at a PostgreSQL database, for example the compose one:
 `TEST_DATABASE_URL=postgresql://phishdet:<your DB_PASSWORD>@127.0.0.1:15432/phishdet` (it works in its own schema and drops it).
@@ -257,9 +269,17 @@ Actions are pinned to commit SHAs, and the tool versions match the ones used loc
 
 ## Deploy to AWS
 
-**Prerequisites:** an AWS account and an AWS CLI v2 profile for it (not the root user); Terraform 1.17
-(the AWS provider is pinned to 6.71.0); Docker with buildx (the image is built for linux/amd64); Python 3.13 with the
-virtual environment from "Tests" (the smoke test uses boto3); a bash shell. Everything runs in eu-north-1.
+**Prerequisites** (the versions we ran; Terraform and the provider version are enforced):
+
+| Tool | Version | Used for |
+|---|---|---|
+| An AWS account and an AWS CLI v2 profile for it | CLI 2.39 | Every AWS step. A named profile with the credentials of an IAM user or role that may create these resources, not the root user. The steps call it `<profile>`; it goes into both `terraform.tfvars` files (`aws_profile`) and into `AWS_PROFILE` for the scripts. |
+| Terraform | 1.17 (`~> 1.17`), AWS provider 6.71.0 | Both stacks. |
+| Docker with buildx | Docker 29.6, buildx 0.35 | `scripts/build_push.sh` builds the image for linux/amd64, because t3 instances are x86_64. On Apple Silicon that build runs under Docker's emulation and is slower; an arm64 image would not start on the instances. |
+| Python with the environment from "Run locally" | 3.13 | The smoke test (boto3). |
+| git, curl, bash | bash 3.2 (macOS) is enough | `build_push.sh` tags the image with the commit. |
+
+Everything runs in eu-north-1. Run the steps from the repository root, in bash (see "Run locally").
 
 **Names.** Every resource name starts with `name_prefix` (set in `terraform/foundation/terraform.tfvars`, default
 `phishdet`); the names in this README are the default ones. A second copy of both stacks in the same account needs only
